@@ -1,486 +1,233 @@
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/responsive_center.dart';
+import '../../../core/l10n/l10n.dart';
+import '../../../core/utils/url_utils.dart';
 
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? AppColors.darkBackground : AppColors.background;
     final screenWidth = MediaQuery.of(context).size.width;
     final screenHeight = MediaQuery.of(context).size.height;
-
     return Scaffold(
-      backgroundColor: AppColors.background,
-      body: Stack(
-        children: [
-          // Background Auras
-          _buildScatteredAuras(screenWidth, screenHeight),
-
-          // Main Content
-          SafeArea(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Header
-                _buildHeader(context),
-
-                // Scrollable Content
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-                    child: Column(
-                      children: [
-                        // What is TBCare+?
-                        _buildInfoCard(
-                          icon: Icons.info_outline_rounded,
-                          title: 'Apa itu TBCare+?',
-                          child: const Text(
-                            'TBCare+ adalah aplikasi kesehatan digital yang dirancang untuk mendukung deteksi dini tuberkulosis (TBC) melalui skrining berbasis gejala dan kesadaran kesehatan.',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.foreground,
-                              height: 1.6,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-
-                        // Our Purpose
-                        _buildInfoCard(
-                          icon: Icons.gps_fixed_rounded,
-                          title: 'Tujuan Kami',
-                          child: Column(
-                            children: [
-                              _buildCheckItem(
-                                'Membantu pengguna mengidentifikasi gejala awal TBC',
-                              ),
-                              const SizedBox(height: 12),
-                              _buildCheckItem(
-                                'Mendorong konsultasi medis tepat waktu',
-                              ),
-                              const SizedBox(height: 12),
-                              _buildCheckItem(
-                                'Meningkatkan kesadaran tentang tuberkulosis',
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-
-                        // How It Works
-                        _buildInfoCard(
-                          icon: Icons.list_alt_rounded,
-                          title: 'Cara Kerja',
-                          child: _buildTimeline(),
-                        ),
-                        const SizedBox(height: 20),
-
-                        // Disclaimer
-                        _buildDisclaimerCard(),
-                        const SizedBox(height: 20),
-
-                        // About Tuberculosis
-                        _buildInfoCard(
-                          icon: Icons.monitor_heart_outlined,
-                          title: 'Tentang Tuberkulosis',
-                          child: const Text(
-                            'Tuberkulosis adalah penyakit menular melalui udara yang disebabkan oleh bakteri yang terutama menyerang paru-paru tetapi juga dapat memengaruhi bagian tubuh lainnya.',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.foreground,
-                              height: 1.6,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 32),
-
-                        // Footer
-                        _buildFooter(),
-                        const SizedBox(height: 32),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+      backgroundColor: bg,
+      body: Stack(children: [
+        _buildScatteredAuras(screenWidth, screenHeight, isDark),
+        SafeArea(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          ResponsiveCenter(maxWidth: 720, child: _buildHeaderContent(context, isDark)),
+          Expanded(child: SingleChildScrollView(padding: const EdgeInsets.fromLTRB(16, 0, 16, 12), child: ResponsiveCenter(maxWidth: 720, child: Column(children: [
+            _buildInfoCard(icon: Icons.info_outline_rounded, title: context.tr('aboutWhatIsTitle'), isDark: isDark, child: Text(context.tr('aboutWhatIsDesc'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: isDark ? AppColors.darkForeground : AppColors.foreground, height: 1.5))),
+            const SizedBox(height: 14),
+            _buildInfoCard(icon: Icons.gps_fixed_rounded, title: context.tr('aboutPurposeTitle'), isDark: isDark, child: Column(children: [_buildCheckItem(context.tr('aboutPurpose1'), isDark), const SizedBox(height: 10), _buildCheckItem(context.tr('aboutPurpose2'), isDark), const SizedBox(height: 10), _buildCheckItem(context.tr('aboutPurpose3'), isDark)])),
+            const SizedBox(height: 14),
+            _buildInfoCard(icon: Icons.list_alt_rounded, title: context.tr('aboutHowTitle'), isDark: isDark, child: _buildTimeline(context, isDark)),
+            const SizedBox(height: 14),
+            _buildDisclaimerCard(isDark, context),
+            const SizedBox(height: 14),
+            _buildInfoCard(icon: Icons.monitor_heart_outlined, title: context.tr('aboutTbTitle'), isDark: isDark, child: Text(context.tr('aboutTbDesc'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: isDark ? AppColors.darkForeground : AppColors.foreground, height: 1.5))),
+            const SizedBox(height: 14),
+            _buildReferenceCard(isDark, context),
+            const SizedBox(height: 14),
+            _buildDeveloperSection(isDark, context),
+            const SizedBox(height: 20),
+            _buildFooter(isDark, context),
+            const SizedBox(height: 24),
+          ])))),
+        ])),
+      ]),
     );
   }
 
-  // ─── HEADER ───────────────────────────────────────────────
-  Widget _buildHeader(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Back Button
-          GestureDetector(
-            onTap: () => Navigator.pop(context),
-            child: Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.7),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.arrow_back,
-                color: AppColors.foreground,
-                size: 20,
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-
-          // Title
-          const Text(
-            'Tentang Aplikasi Ini',
-            style: TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.w800,
-              color: AppColors.foreground,
-              letterSpacing: -1.0,
-              height: 1.0,
-            ),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'Pelajari lebih lanjut tentang TBCare+',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-              color: AppColors.mutedForeground,
-            ),
-          ),
-        ],
-      ),
-    );
+  Widget _buildHeaderContent(BuildContext context, bool isDark) {
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    return Padding(padding: const EdgeInsets.fromLTRB(0, 16, 0, 18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      GestureDetector(onTap: () => Navigator.pop(context), child: Container(width: 36, height: 36, decoration: BoxDecoration(color: card.withValues(alpha: 0.9), shape: BoxShape.circle, border: Border.all(color: isDark ? AppColors.darkBorder : Colors.white), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))]), child: Icon(Icons.arrow_back, color: fg, size: 18))),
+      const SizedBox(height: 14),
+      Text(context.tr('aboutTitle'), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: fg, letterSpacing: -0.8, height: 1.0)),
+      const SizedBox(height: 4),
+      Text(context.tr('aboutSubtitle'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: mutedFg)),
+    ]));
   }
 
-  // ─── INFO CARD ────────────────────────────────────────────
-  Widget _buildInfoCard({
-    required IconData icon,
-    required String title,
-    required Widget child,
-  }) {
+  Widget _buildInfoCard({required IconData icon, required String title, required Widget child, required bool isDark}) {
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    return Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: card.withValues(alpha: isDark ? 1.0 : 0.85), borderRadius: BorderRadius.circular(20), border: Border.all(color: isDark ? AppColors.darkBorder : Colors.white), boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.08), blurRadius: 20, offset: const Offset(0, 6))]), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Container(width: 36, height: 36, decoration: BoxDecoration(shape: BoxShape.circle, color: primary.withValues(alpha: 0.1)), child: Icon(icon, size: 18, color: primary)), const SizedBox(width: 10), Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: fg))]), const SizedBox(height: 12), child]));
+  }
+
+  Widget _buildCheckItem(String text, bool isDark) {
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(width: 18, height: 18, margin: const EdgeInsets.only(top: 2), decoration: BoxDecoration(shape: BoxShape.circle, color: primary.withValues(alpha: 0.1)), child: Icon(Icons.check, size: 10, color: primary)), const SizedBox(width: 10), Expanded(child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: fg, height: 1.35)))]);
+  }
+
+  Widget _buildTimeline(BuildContext context, bool isDark) {
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    final steps = [context.tr('aboutHow1'), context.tr('aboutHow2'), context.tr('aboutHow3')];
+    return Column(children: List.generate(steps.length, (index) => Padding(padding: EdgeInsets.only(bottom: index < steps.length - 1 ? 12 : 0), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Column(children: [Container(width: 24, height: 24, decoration: BoxDecoration(shape: BoxShape.circle, color: isDark ? AppColors.darkSurface : Colors.white, border: Border.all(color: primary, width: 1.6), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4, offset: const Offset(0, 2))]), child: Center(child: Text('${index + 1}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: primary)))), if (index < steps.length - 1) Container(width: 1, height: 16, color: primary.withValues(alpha: 0.2))]), const SizedBox(width: 12), Expanded(child: Padding(padding: const EdgeInsets.only(top: 3), child: Text(steps[index], style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: fg, height: 1.4))))]))));
+  }
+
+  Widget _buildDisclaimerCard(bool isDark, BuildContext context) {
+    final warning = isDark ? AppColors.darkWarning : AppColors.warning;
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    return Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: warning.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(20), border: Border.all(color: warning.withValues(alpha: 0.3)), boxShadow: [BoxShadow(color: warning.withValues(alpha: 0.12), blurRadius: 20, offset: const Offset(0, 6))]), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Container(width: 36, height: 36, decoration: BoxDecoration(shape: BoxShape.circle, color: warning.withValues(alpha: 0.2)), child: Icon(Icons.shield_outlined, size: 18, color: warning)), const SizedBox(width: 10), Text(context.tr('aboutDisclaimerTitle'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: fg))]), const SizedBox(height: 10), Text(context.tr('aboutDisclaimerDesc'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: fg, height: 1.5))]));
+  }
+
+  Widget _buildReferenceCard(bool isDark, BuildContext context) {
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.85),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: Colors.white),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF047857).withValues(alpha: 0.12),
-            blurRadius: 30,
-            offset: const Offset(0, 8),
-          ),
-        ],
+        color: primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: primary.withValues(alpha: 0.18)),
+        boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.08), blurRadius: 20, offset: const Offset(0, 6))],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header row
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.primary.withValues(alpha: 0.1),
-                ),
-                child: Icon(icon, size: 20, color: AppColors.primary),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.foreground,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          child,
-        ],
-      ),
-    );
-  }
-
-  // ─── CHECK ITEM ───────────────────────────────────────────
-  Widget _buildCheckItem(String text) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(width: 36, height: 36, decoration: BoxDecoration(shape: BoxShape.circle, color: primary.withValues(alpha: 0.12)), child: Icon(Icons.menu_book_rounded, size: 18, color: primary)),
+          const SizedBox(width: 10),
+          Expanded(child: Text(context.tr('aboutReferenceTitle'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: fg))),
+        ]),
+        const SizedBox(height: 12),
         Container(
-          width: 20,
-          height: 20,
-          margin: const EdgeInsets.only(top: 2),
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: AppColors.primary.withValues(alpha: 0.1),
+            color: (isDark ? AppColors.darkSurface : Colors.white).withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: primary.withValues(alpha: 0.12)),
           ),
-          child: const Icon(Icons.check, size: 12, color: AppColors.primary),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(context.tr('aboutReferenceName'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: fg, height: 1.4)),
+            const SizedBox(height: 6),
+            Text(context.tr('aboutReferenceAuthors'), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: mutedFg, height: 1.4)),
+            const SizedBox(height: 4),
+            Text(context.tr('aboutReferenceSource'), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: primary, height: 1.4)),
+          ]),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: AppColors.foreground,
-              height: 1.375,
-            ),
-          ),
-        ),
-      ],
+        const SizedBox(height: 10),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.info_outline_rounded, size: 14, color: mutedFg),
+          const SizedBox(width: 6),
+          Expanded(child: Text(context.tr('aboutReferenceDesc'), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: mutedFg, height: 1.5))),
+        ]),
+      ]),
     );
   }
 
-  // ─── TIMELINE ─────────────────────────────────────────────
-  Widget _buildTimeline() {
-    final steps = [
-      'Jawab pemeriksaan kesehatan singkat atau lengkap',
-      'Terima evaluasi risiko',
-      'Dapatkan rekomendasi berdasarkan kondisi Anda',
+  Widget _buildDeveloperSection(bool isDark, BuildContext context) {
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    const devs = [
+      ('aboutDev1Name', 'https://www.linkedin.com/in/rizal-maulana-airlangga-072b21346/'),
+      ('aboutDev2Name', 'https://www.linkedin.com/in/irwin-wiryawan-2214a6436/'),
+      ('aboutDev3Name', 'https://www.linkedin.com/in/nabeel-prakasa-979456304/'),
     ];
-
-    return Column(
-      children: List.generate(steps.length, (index) {
-        return Padding(
-          padding: EdgeInsets.only(bottom: index < steps.length - 1 ? 16 : 0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Step number with connecting line
-              Column(
-                children: [
-                  Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white,
-                      border: Border.all(color: AppColors.primary, width: 2),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.05),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Center(
-                      child: Text(
-                        '${index + 1}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (index < steps.length - 1)
-                    Container(
-                      width: 1,
-                      height: 20,
-                      color: AppColors.primary.withValues(alpha: 0.2),
-                    ),
-                ],
-              ),
-              const SizedBox(width: 16),
-              // Step text
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    steps[index],
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.foreground,
-                      height: 1.4,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      }),
-    );
-  }
-
-  // ─── DISCLAIMER CARD ──────────────────────────────────────
-  Widget _buildDisclaimerCard() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.warning.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
-            blurRadius: 30,
-            offset: const Offset(0, 8),
-          ),
-        ],
+        color: (isDark ? AppColors.darkSurface : Colors.white).withValues(alpha: isDark ? 1.0 : 0.88),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: isDark ? AppColors.darkBorder : Colors.white),
+        boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.08), blurRadius: 20, offset: const Offset(0, 6))],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.warning.withValues(alpha: 0.2),
-                ),
-                child: const Icon(
-                  Icons.shield_outlined,
-                  size: 20,
-                  color: AppColors.warning,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Text(
-                'Penafian',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.foreground,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            'Aplikasi ini bukan pengganti diagnosis medis profesional. Pengguna disarankan untuk berkonsultasi dengan penyedia layanan kesehatan untuk pemeriksaan dan perawatan yang akurat.',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: AppColors.foreground,
-              height: 1.625,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ─── FOOTER ───────────────────────────────────────────────
-  Widget _buildFooter() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(width: 36, height: 36, decoration: BoxDecoration(shape: BoxShape.circle, color: primary.withValues(alpha: 0.1)), child: Icon(Icons.code_rounded, size: 18, color: primary)),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(context.tr('aboutDeveloperTitle'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: fg)),
+            Text(context.tr('aboutDeveloperSubtitle'), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: mutedFg)),
+          ])),
+        ]),
+        const SizedBox(height: 10),
         Container(
-          width: 96,
-          height: 96,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(32),
-            border: Border.all(color: Colors.white),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.05),
-                blurRadius: 10,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Center(
-            child: Image.asset(
-              'assets/images/img_logo_app.png',
-              width: 56,
-              height: 56,
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) => const Icon(
-                Icons.shield_outlined,
-                color: AppColors.primary,
-                size: 48,
-              ),
-            ),
-          ),
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(color: primary.withValues(alpha: 0.07), borderRadius: BorderRadius.circular(12), border: Border.all(color: primary.withValues(alpha: 0.14))),
+          child: Row(children: [
+            Icon(Icons.ads_click_rounded, size: 14, color: primary),
+            const SizedBox(width: 6),
+            Expanded(child: Text(context.tr('aboutDeveloperHint'), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: primary))),
+          ]),
         ),
         const SizedBox(height: 12),
-        FutureBuilder<PackageInfo>(
-          future: PackageInfo.fromPlatform(),
-          builder: (context, snapshot) {
-            final version = snapshot.data?.version ?? '';
-            final versionLabel = version.isEmpty ? 'Versi' : 'Versi $version';
-            return Text(
-              '$versionLabel • Dikembangkan untuk\ntujuan edukasi dan\nkesadaran kesehatan',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: AppColors.mutedForeground,
-                height: 1.625,
-              ),
-            );
-          },
-        ),
-      ],
+        ...devs.map((e) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _buildDeveloperNameCard(name: context.tr(e.$1), url: e.$2, isDark: isDark, context: context),
+            )),
+      ]),
     );
   }
 
-  // ─── BACKGROUND AURAS ─────────────────────────────────────
-  Widget _buildScatteredAuras(double sw, double sh) {
-    return Stack(
-      children: [
-        Positioned(
-          top: -sh * 0.05,
-          right: -sw * 0.1,
-          child: _buildAura(175, AppColors.primary.withValues(alpha: 0.1)),
+  Widget _buildDeveloperNameCard({required String name, required String url, required bool isDark, required BuildContext context}) {
+    final card = isDark ? AppColors.darkSurfaceAlt : Colors.white;
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => UrlUtils.launchLinkedIn(context, url),
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: card.withValues(alpha: isDark ? 1.0 : 0.92),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: primary.withValues(alpha: 0.14)),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
+          ),
+          child: Row(children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(color: primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
+              child: Icon(Icons.person_rounded, size: 18, color: primary),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(name, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: fg, height: 1.2)),
+              const SizedBox(height: 2),
+              Row(children: [
+                Icon(Icons.link_rounded, size: 12, color: mutedFg),
+                const SizedBox(width: 4),
+                Text('LinkedIn', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: mutedFg)),
+              ]),
+            ])),
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(color: primary.withValues(alpha: 0.1), shape: BoxShape.circle),
+              child: Icon(Icons.open_in_new_rounded, size: 14, color: primary),
+            ),
+          ]),
         ),
-        Positioned(
-          top: sh * 0.4,
-          left: -sw * 0.2,
-          child: _buildAura(150, AppColors.secondary.withValues(alpha: 0.05)),
-        ),
-        Positioned(
-          bottom: sh * 0.1,
-          right: -sw * 0.1,
-          child: _buildAura(125, AppColors.accent.withValues(alpha: 0.05)),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildAura(double size, Color color) {
-    return Container(
-      width: size * 2,
-      height: size * 2,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(color: color, blurRadius: size, spreadRadius: size / 2),
-        ],
       ),
     );
   }
+
+  Widget _buildFooter(bool isDark, BuildContext context) {
+    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    return Column(crossAxisAlignment: CrossAxisAlignment.center, children: [Container(width: 80, height: 80, decoration: BoxDecoration(color: isDark ? AppColors.darkSurface : Colors.white, borderRadius: BorderRadius.circular(20), border: Border.all(color: isDark ? AppColors.darkBorder : Colors.white), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 2))]), child: Center(child: Image.asset('assets/images/img_logo_app.png', width: 44, height: 44, fit: BoxFit.contain, errorBuilder: (c, e, s) => Icon(Icons.shield_outlined, color: primary, size: 36)))) , const SizedBox(height: 10), FutureBuilder<PackageInfo>(future: PackageInfo.fromPlatform(), builder: (context, snapshot) { final version = snapshot.data?.version ?? ''; final versionLabel = version.isEmpty ? context.tr('version') : '${context.tr('version')} $version'; return Text('$versionLabel • ${context.tr('aboutFooter')}', textAlign: TextAlign.center, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: mutedFg, height: 1.5)); })]);
+  }
+
+  Widget _buildScatteredAuras(double sw, double sh, bool isDark) => Stack(children: [Positioned(top: -sh * 0.05, right: -sw * 0.1, child: _buildAura(140, (isDark ? AppColors.darkPrimary : AppColors.primary).withValues(alpha: 0.1))), Positioned(top: sh * 0.4, left: -sw * 0.2, child: _buildAura(120, (isDark ? AppColors.darkSecondary : AppColors.secondary).withValues(alpha: 0.05))), Positioned(bottom: sh * 0.1, right: -sw * 0.1, child: _buildAura(100, (isDark ? AppColors.darkAccent : AppColors.accent).withValues(alpha: 0.05)))]);
+  Widget _buildAura(double size, Color color) => Container(width: size * 2, height: size * 2, decoration: BoxDecoration(shape: BoxShape.circle, boxShadow: [BoxShadow(color: color, blurRadius: size, spreadRadius: size / 2)]));
 }

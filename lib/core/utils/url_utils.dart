@@ -1,26 +1,39 @@
-import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class UrlUtils {
-  static Future<void> launchNearestClinicMap(BuildContext context) async {
-    final Uri url = Uri.parse(
-      'https://www.google.com/maps/search/?api=1&query=Puskesmas+atau+Rumah+Sakit+terdekat',
-    );
+  static const _clinicSearchUrl =
+      'https://www.google.com/maps/search/klinik+terdekat/';
 
+  static Future<void> launchExternalUrl(
+    BuildContext context,
+    String urlString,
+  ) async {
+    final uri = Uri.parse(urlString);
     try {
-      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Tidak dapat membuka peta.')),
-          );
-        }
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!launched && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal membuka tautan: $urlString')),
+        );
       }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Gagal membuka peta.')));
-      }
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gagal membuka tautan: $urlString')),
+      );
     }
   }
+
+  static Future<void> launchLinkedIn(
+    BuildContext context,
+    String url,
+  ) =>
+      launchExternalUrl(context, url);
+
+  static Future<void> launchNearestClinicMap(BuildContext context) =>
+      launchExternalUrl(context, _clinicSearchUrl);
 }

@@ -1,4 +1,6 @@
 import 'dart:convert';
+import '../l10n/app_strings.dart';
+import '../l10n/tb_content_l10n.dart';
 
 class QuickCheckConfig {
   final List<QuickCheckQuestion> questions;
@@ -84,6 +86,8 @@ class TbTypeWeight {
     'tbTypeName': tbTypeName,
     'weight': weight,
   };
+
+  String localizedName(AppLocale locale) => TbContentL10n.tbType(tbTypeName, locale);
 }
 
 class QuickCheckQuestion {
@@ -124,6 +128,11 @@ class QuickCheckQuestion {
         numPart <= 8 &&
         !symptomCode.contains(RegExp(r'[a-z]'));
   }
+
+  String localizedSymptomName(AppLocale locale) => TbContentL10n.symptomName(symptomName, locale);
+  String localizedSymptomDescription(AppLocale locale) => TbContentL10n.symptomDesc(symptomDescription, locale);
+  String localizedQuestionText(AppLocale locale) => TbContentL10n.questionText(questionText, locale);
+  String localizedTbTypeName(AppLocale locale) => tbTypeName == null ? '' : TbContentL10n.tbType(tbTypeName!, locale);
 
   factory QuickCheckQuestion.fromJson(Map<String, dynamic> json) {
     return QuickCheckQuestion(
@@ -206,4 +215,8 @@ class RiskLevelConfig {
     'description': description,
     'recommendation': recommendation,
   };
+
+  String localizedTitle(AppLocale locale) => TbContentL10n.riskTitle(title, locale);
+  String localizedDescription(AppLocale locale) => TbContentL10n.riskDesc(description, locale);
+  String localizedRecommendation(AppLocale locale) => TbContentL10n.riskReco(recommendation, locale);
 }

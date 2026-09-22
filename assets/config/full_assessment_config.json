@@ -570,7 +570,7 @@
       "code": "medium",
       "title": "Medium Risk",
       "minScore": 58.01,
-      "maxScore": 73,
+      "maxScore": 75,
       "description": "Persentase hasil berada pada rentang risiko sedang berdasarkan perhitungan certainty factor.",
       "recommendation": "Disarankan berkonsultasi dengan tenaga kesehatan, terutama jika batuk, demam, atau berat badan turun berlangsung lama."
     },
@@ -580,7 +580,7 @@
       "tbTypeName": null,
       "code": "high",
       "title": "High Risk",
-      "minScore": 73.01,
+      "minScore": 75.01,
       "maxScore": 100,
       "description": "Persentase hasil berada pada rentang risiko tinggi berdasarkan perhitungan certainty factor.",
       "recommendation": "Segera lakukan pemeriksaan ke fasilitas kesehatan untuk evaluasi lebih lanjut."
@@ -603,7 +603,7 @@
       "code": "medium",
       "title": "Medium Risk",
       "minScore": 58.01,
-      "maxScore": 73,
+      "maxScore": 75,
       "description": "Persentase hasil berada pada rentang risiko sedang berdasarkan perhitungan certainty factor.",
       "recommendation": "Disarankan berkonsultasi dengan tenaga kesehatan jika benjolan menetap, membesar, atau terasa nyeri."
     },
@@ -613,7 +613,7 @@
       "tbTypeName": null,
       "code": "high",
       "title": "High Risk",
-      "minScore": 73.01,
+      "minScore": 75.01,
       "maxScore": 100,
       "description": "Persentase hasil berada pada rentang risiko tinggi berdasarkan perhitungan certainty factor.",
       "recommendation": "Segera lakukan pemeriksaan medis, terutama jika benjolan pecah, bernanah, atau terus membesar."
@@ -636,7 +636,7 @@
       "code": "medium",
       "title": "Medium Risk",
       "minScore": 58.01,
-      "maxScore": 73,
+      "maxScore": 75,
       "description": "Persentase hasil berada pada rentang risiko sedang berdasarkan perhitungan certainty factor.",
       "recommendation": "Disarankan berkonsultasi dengan tenaga kesehatan jika terdapat benjolan, nyeri, atau tanda radang."
     },
@@ -646,7 +646,7 @@
       "tbTypeName": null,
       "code": "high",
       "title": "High Risk",
-      "minScore": 73.01,
+      "minScore": 75.01,
       "maxScore": 100,
       "description": "Persentase hasil berada pada rentang risiko tinggi berdasarkan perhitungan certainty factor.",
       "recommendation": "Segera lakukan pemeriksaan medis untuk evaluasi benjolan atau radang pada payudara."
@@ -669,7 +669,7 @@
       "code": "medium",
       "title": "Medium Risk",
       "minScore": 58.01,
-      "maxScore": 73,
+      "maxScore": 75,
       "description": "Persentase hasil berada pada rentang risiko sedang berdasarkan perhitungan certainty factor.",
       "recommendation": "Disarankan berkonsultasi dengan tenaga kesehatan jika nyeri punggung menetap atau mengganggu aktivitas."
     },
@@ -679,7 +679,7 @@
       "tbTypeName": null,
       "code": "high",
       "title": "High Risk",
-      "minScore": 73.01,
+      "minScore": 75.01,
       "maxScore": 100,
       "description": "Persentase hasil berada pada rentang risiko tinggi berdasarkan perhitungan certainty factor.",
       "recommendation": "Segera lakukan pemeriksaan medis, terutama jika nyeri berat, kaku, atau ada benjolan di tulang belakang."

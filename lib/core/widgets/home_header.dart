@@ -33,8 +33,9 @@ class HomeHeader extends StatelessWidget {
   }
 
   Widget _buildContent(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -43,41 +44,22 @@ class HomeHeader extends StatelessWidget {
           Row(
             children: [
               Container(
-                width: 56,
-                height: 56,
+                width: 48,
+                height: 48,
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: isDark ? AppColors.darkSurface : Colors.white,
                   shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primary.withValues(alpha: 0.1),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+                  border: Border.all(color: isDark ? AppColors.darkBorder : Colors.white),
+                  boxShadow: [BoxShadow(color: (isDark ? AppColors.darkPrimary : AppColors.primary).withValues(alpha: 0.1), blurRadius: 8, offset: const Offset(0, 3))],
                 ),
                 child: Center(
-                  child: Image.asset(
-                    'assets/images/img_logo_app.png',
-                    width: 36,
-                    height: 36,
-                    fit: BoxFit.contain,
-                    errorBuilder: (context, error, stackTrace) => const Icon(
-                      Icons.shield_outlined,
-                      color: AppColors.primary,
-                      size: 24,
-                    ),
-                  ),
+                  child: Image.asset('assets/images/img_logo_app.png', width: 30, height: 30, fit: BoxFit.contain, errorBuilder: (context, error, stackTrace) => Icon(Icons.shield_outlined, color: isDark ? AppColors.darkPrimary : AppColors.primary, size: 20)),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               RichText(
                 text: TextSpan(
-                  style: const TextStyle(
-                    fontSize: 24,
-                    color: Color(0xFF076453),
-                    letterSpacing: -0.5,
-                  ),
+                  style: TextStyle(fontSize: 18, color: isDark ? AppColors.darkForeground : const Color(0xFF076453), letterSpacing: -0.4),
                   children: [
                     const TextSpan(
                       text: 'TB',
@@ -132,7 +114,7 @@ class HomeHeader extends StatelessWidget {
                           (!isGuest &&
                               (profilePicture == null ||
                                   profilePicture!.isEmpty))
-                          ? const LinearGradient(
+                          ? LinearGradient(
                               colors: [AppColors.primary, AppColors.secondary],
                             )
                           : null,
@@ -156,7 +138,7 @@ class HomeHeader extends StatelessWidget {
                       ],
                     ),
                     child: isGuest
-                        ? const Icon(
+                        ? Icon(
                             Icons.person_outline_rounded,
                             color: AppColors.mutedForeground,
                             size: 24,

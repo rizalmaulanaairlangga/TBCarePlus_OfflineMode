@@ -41,16 +41,29 @@ android {
 
     signingConfigs {
         create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["keyPassword"] as String
+            keyAlias = keystoreProperties["keyAlias"] as String? ?: ""
+            keyPassword = keystoreProperties["keyPassword"] as String? ?: ""
             storeFile = keystoreProperties["storeFile"]?.let { file(it) }
-            storePassword = keystoreProperties["storePassword"] as String
+            storePassword = keystoreProperties["storePassword"] as String? ?: ""
+        }
+        // Fallback to debug keystore when no release keystore is configured
+        // This prevents `null cannot be cast to non-null type kotlin.String` when key.properties is missing
+        getByName("debug") {
+            // use default debug keystore - no custom config needed
         }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            // Only use release signing if key.properties exists and storeFile is configured
+            signingConfig = if (keystorePropertiesFile.exists() && keystoreProperties["storeFile"] != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            // isDebuggable = false is default for release
         }
     }
 }

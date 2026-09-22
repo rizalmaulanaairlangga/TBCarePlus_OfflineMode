@@ -1,18 +1,17 @@
-import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import '../../../core/services/storage_service.dart';
-import '../../../core/services/auth_api_service.dart';
-import '../../../core/services/connectivity_service.dart';
-import '../../../core/utils/network_exception.dart';
-import '../../../core/utils/url_utils.dart';
-import '../../../core/services/assessment_api_service.dart';
+import '../../../core/services/local_assessment_service.dart';
 import '../../../core/models/assessment_config_models.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../routes/app_routes.dart';
 import '../../../core/widgets/home_header.dart';
-import '../../../core/widgets/guest_bottom_nav.dart';
 import '../../../core/widgets/app_bottom_nav.dart';
-import '../../result/pages/result_page.dart';
+import '../../../core/widgets/responsive_center.dart';
+import '../../../core/l10n/l10n.dart';
+import '../../../core/settings/app_settings.dart';
+import '../../../core/utils/url_utils.dart';
+
+enum RiskLevel { low, medium, high }
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -24,41 +23,23 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   QuickCheckConfig? _config;
   Map<int, bool> _symptomStates = {};
-  bool _isGuest = true;
-  String? _userName;
-  String? _profilePicture;
   bool _loadingConfig = true;
+  Map<String, dynamic>? _mostRecentAssessment;
+  bool _loadingMostRecent = true;
   Map<String, dynamic>? _storedResult;
   bool get _hasStoredResult => _storedResult != null;
-
-  // For logged-in users: most recent assessment data
-  Map<String, dynamic>? _mostRecentAssessment;
-  bool _loadingMostRecentAssessment = false;
-
-  // Re-entry guard for the quick-check submit so rapid taps can't fire twice.
   bool _submittingQuick = false;
-
-  // Tracks the device's most recent online/offline state. Used to detect
-  // the offline→online transition and auto-refresh when the user returns.
-  bool _wasOnline = true;
-  StreamSubscription<bool>? _connectivitySub;
 
   int get _answeredCount => _symptomStates.values.where((v) => v).length;
 
   double get _combinedCF {
     if (_config == null || _answeredCount == 0) return 0;
-
-    // Mirror the backend's quick-check scoring (AssessmentController.SubmitAssessment):
-    // combinedCf = sum(selected question weights) / sum(all question weights).
-    // Quick check is single-TB-type (Paru), so each question's `weight` is the
-    // Paru weight and no cross-type fan-out is needed.
     double selectedWeight = 0;
     double totalWeight = 0;
     for (final q in _config!.questions) {
       totalWeight += q.weight;
       if (_symptomStates[q.symptomId] == true) selectedWeight += q.weight;
     }
-
     if (totalWeight <= 0) return 0;
     return selectedWeight / totalWeight;
   }
@@ -83,205 +64,108 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  bool _argumentsLoaded = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (!_argumentsLoaded) {
-      _argumentsLoaded = true;
-      final args = ModalRoute.of(context)?.settings.arguments;
-      if (args is Map) {
-        if (args.containsKey('isGuest')) {
-          _isGuest = args['isGuest'] as bool;
-        }
-      }
-    }
-  }
-
   @override
   void initState() {
     super.initState();
-    _loadUser();
     _loadConfig();
-    _subscribeConnectivity();
+    _loadMostRecent();
+    // Rebuild when language changes so TBC questions update
+    // ignore: invalid_use_of_protected_member
+    // AppSettings is ChangeNotifier; listen via instance
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppSettings.instance.addListener(_onLocaleChanged);
+    });
+  }
+
+  void _onLocaleChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    _connectivitySub?.cancel();
+    try {
+      AppSettings.instance.removeListener(_onLocaleChanged);
+    } catch (_) {}
     super.dispose();
   }
 
-  void _subscribeConnectivity() {
-    // Seed initial state so an early "online" emission doesn't misfire the
-    // refresh logic when the app is already online at launch.
-    ConnectivityService.isOnline().then((online) {
-      if (!mounted) return;
-      _wasOnline = online;
-    });
-    _connectivitySub = ConnectivityService.onChange().listen((online) {
-      if (!mounted) return;
-      // Only react to the offline→online transition. We don't want to refetch
-      // every time the user toggles between WiFi and mobile data while online.
-      if (!_wasOnline && online) {
-        _refreshAll();
-      }
-      _wasOnline = online;
-    });
-  }
-
-  /// Re-fetch all data sources that depend on the network. Called on
-  /// pull-to-refresh and after returning online. If we have nothing to fetch
-  /// against (offline), the existing cached state is preserved — the user
-  /// keeps seeing their last result instead of being kicked back to the
-  /// fresh assessment card.
-  Future<void> _refreshAll() async {
-    final online = await ConnectivityService.isOnline();
-    if (!online) {
-      _showSnack(
-        'Tidak ada koneksi. Menampilkan data terakhir.',
-        background: AppColors.warning,
-      );
-      return;
-    }
-    await Future.wait<void>([
-      _loadConfig(),
-      _loadUser(),
-    ]);
-  }
-
-  /// Cache-then-revalidate for the logged-in user's most-recent assessment:
-  /// 1. Hydrate from local cache so the card renders instantly.
-  /// 2. Fetch from backend in the background.
-  /// 3. On success → update state + overwrite cache.
-  /// 4. On failure → keep the cached value visible (do not null it out).
-  Future<void> _loadMostRecentAssessment() async {
-    if (_isGuest) return;
-    final user = await StorageService.getUser();
-    final userId = user?.id ?? '';
-
-    // Step 1 — sync render from cache before hitting the network.
-    final cached = userId.isEmpty
-        ? null
-        : await StorageService.getCachedRecentAssessment(userId);
-    if (cached != null && mounted) {
-      setState(() {
-        _mostRecentAssessment = cached;
-        _loadingMostRecentAssessment = false;
-      });
-    } else if (mounted) {
-      setState(() => _loadingMostRecentAssessment = true);
-    }
-
-    // Step 2 — fetch fresh.
-    try {
-      final assessment = await AssessmentApiService.fetchMostRecentAssessment();
-      if (!mounted) return;
-      setState(() {
-        if (assessment != null) _mostRecentAssessment = assessment;
-        _loadingMostRecentAssessment = false;
-      });
-      if (assessment != null && userId.isNotEmpty) {
-        await StorageService.saveCachedRecentAssessment(userId, assessment);
-      }
-    } catch (_) {
-      // Step 4 — keep whatever (cached or null) is on screen.
-      if (!mounted) return;
-      setState(() => _loadingMostRecentAssessment = false);
-    }
-  }
-
-  Future<void> _loadUser() async {
-    // Source-of-truth for "is this an authenticated session" is the access
-    // token. A cached user without a token (e.g., after token expiry or a
-    // partial logout) is NOT logged in — treat as guest.
-    final loggedIn = await StorageService.isLoggedIn();
-    final user = loggedIn ? await StorageService.getUser() : null;
-    if (!mounted) return;
-    final wasGuest = _isGuest;
-    setState(() {
-      _isGuest = !loggedIn;
-      _userName = user?.fullName;
-      _profilePicture = user?.profilePicture;
-    });
-
-    if (_isGuest) {
-      // Guest result is session-scoped: kept in memory only for this app run.
-      setState(() => _storedResult = StorageService.guestSessionResult);
-    } else if (!_isGuest && wasGuest) {
-      // Guest→logged-in: hide guest result, load from backend.
-      setState(() => _storedResult = null);
-      _loadMostRecentAssessment();
-    } else if (!_isGuest) {
-      // Still logged-in: load most recent assessment
-      _loadMostRecentAssessment();
-    }
-
-    if (user != null) {
-      try {
-        final updatedUser = await AuthApiService.fetchCurrentUser();
-        if (mounted) {
-          setState(() {
-            _userName = updatedUser.fullName;
-            _profilePicture = updatedUser.profilePicture;
-          });
-        }
-      } catch (e) {
-        // Silently fail background sync (e.g. if offline)
-      }
-    }
-  }
-
   Future<void> _loadConfig() async {
-    final config = await AssessmentApiService.fetchQuickCheckConfig();
-    if (!mounted) return;
+    try {
+      final config = await LocalAssessmentService.getQuickCheckConfig();
+      if (!mounted) return;
+      setState(() {
+        _config = config;
+        _symptomStates = {for (final q in config.questions) q.symptomId: false};
+        _loadingConfig = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingConfig = false);
+    }
+  }
+
+  Future<void> _loadMostRecent() async {
+    try {
+      final recent = await LocalAssessmentService.fetchMostRecentAssessment();
+      if (!mounted) return;
+      setState(() {
+        _mostRecentAssessment = recent;
+        _loadingMostRecent = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingMostRecent = false);
+    }
+  }
+
+  Future<void> _refreshAll() async {
     setState(() {
-      _config = config;
-      _symptomStates = {for (final q in config.questions) q.symptomId: false};
-      _loadingConfig = false;
+      _loadingConfig = true;
+      _loadingMostRecent = true;
     });
+    await Future.wait([_loadConfig(), _loadMostRecent()]);
   }
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? AppColors.darkBackground : AppColors.background;
     final screenWidth = MediaQuery.of(context).size.width;
     final screenHeight = MediaQuery.of(context).size.height;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: bg,
       body: Stack(
         children: [
-          _buildScatteredAuras(screenWidth, screenHeight),
+          _buildScatteredAuras(screenWidth, screenHeight, isDark),
           SafeArea(
             child: Column(
               children: [
-                HomeHeader(
-                  isGuest: _isGuest,
-                  userName: _userName ?? StorageService.cachedUser?.fullName,
-                  profilePicture:
-                      _profilePicture ??
-                      StorageService.cachedUser?.profilePicture,
+                const ResponsiveCenter(
+                  maxWidth: 720,
+                  child: HomeHeader(isGuest: false),
                 ),
                 Expanded(
                   child: RefreshIndicator(
                     onRefresh: _refreshAll,
-                    color: AppColors.primary,
+                    color: isDark ? AppColors.darkPrimary : AppColors.primary,
                     child: SingleChildScrollView(
                       physics: const AlwaysScrollableScrollPhysics(),
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                      child: Column(
-                        children: [
-                          if (_loadingConfig ||
-                              (_loadingMostRecentAssessment && !_isGuest))
-                            _buildLoadingCard()
-                          else if (!_isGuest && _mostRecentAssessment != null)
-                            _buildLoggedInResultCard()
-                          else if (_hasStoredResult)
-                            _buildStoredResultCard()
-                          else
-                            _buildAssessmentCard(),
-                        ],
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      child: ResponsiveCenter(
+                        maxWidth: 720,
+                        child: Column(
+                          children: [
+                            if (_loadingConfig || _loadingMostRecent)
+                              _buildLoadingCard(isDark)
+                            else if (_mostRecentAssessment != null)
+                              _buildRecentResultCard(isDark)
+                            else if (_hasStoredResult)
+                              _buildStoredResultCard(isDark)
+                            else
+                              _buildAssessmentCard(isDark),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -291,62 +175,45 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
-      bottomNavigationBar: _isGuest
-          ? const GuestBottomNav(currentIndex: 0)
-          : AppBottomNav(
-              currentIndex: 0,
-              onTap: (i) {
-                final routes = [
-                  AppRoutes.home,
-                  AppRoutes.history,
-                  AppRoutes.profile,
-                ];
-                if (i < routes.length) {
-                  Navigator.pushNamedAndRemoveUntil(
-                    context,
-                    routes[i],
-                    (route) => false,
-                    arguments: {'isGuest': _isGuest},
-                  );
-                }
-              },
-            ),
+      bottomNavigationBar: AppBottomNav(
+        currentIndex: 0,
+        onTap: (i) {
+          final routes = [AppRoutes.home, AppRoutes.history, AppRoutes.profile];
+          if (i < routes.length) {
+            Navigator.pushNamedAndRemoveUntil(context, routes[i], (route) => false);
+          }
+        },
+      ),
     );
   }
 
-  Widget _buildLoadingCard() {
+  Widget _buildLoadingCard(bool isDark) {
+    final card = isDark ? AppColors.darkSurface : Colors.white;
     return ClipRRect(
-      borderRadius: BorderRadius.circular(32),
+      borderRadius: BorderRadius.circular(24),
       child: Container(
-        height: 300,
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.7),
-          borderRadius: BorderRadius.circular(32),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
-        ),
+        height: 240,
+        decoration: BoxDecoration(color: card.withValues(alpha: isDark ? 1.0 : 0.7), borderRadius: BorderRadius.circular(24), border: Border.all(color: (isDark ? AppColors.darkBorder : Colors.white).withValues(alpha: 0.5))),
         child: const Center(child: CircularProgressIndicator()),
       ),
     );
   }
 
-  Widget _buildAssessmentCard() {
+  Widget _buildAssessmentCard(bool isDark) {
     final config = _config!;
-
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
     return ClipRRect(
-      borderRadius: BorderRadius.circular(32),
+      borderRadius: BorderRadius.circular(24),
       child: Container(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.7),
-          borderRadius: BorderRadius.circular(32),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.primary.withValues(alpha: 0.1),
-              blurRadius: 40,
-              offset: const Offset(0, 20),
-            ),
-          ],
+          color: card.withValues(alpha: isDark ? 1.0 : 0.7),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: (isDark ? AppColors.darkBorder : Colors.white).withValues(alpha: 0.5)),
+          boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.1), blurRadius: 24, offset: const Offset(0, 12))],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -357,40 +224,41 @@ class _HomePageState extends State<HomePage> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Cek TBC Cepat',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        color: AppColors.foreground,
-                      ),
-                    ),
-                    Text(
-                      '${config.questions.length} gejala untuk ditinjau',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: AppColors.mutedForeground,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
+                    Text(context.tr('homeQuickTitle'), style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: fg)),
+                    Text(context.tr('homeSymptomCount', {'count': '${config.questions.length}'}), style: TextStyle(fontSize: 12, color: mutedFg, fontWeight: FontWeight.w500)),
                   ],
                 ),
               ],
             ),
-            const SizedBox(height: 24),
-
-            // Dynamic symptom items from backend
-            ...config.questions.map(
-              (q) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _buildSymptomItem(q),
-              ),
-            ),
-
-            const SizedBox(height: 24),
-            _buildCheckButton(),
+            const SizedBox(height: 18),
+            ...config.questions.map((q) => Padding(padding: const EdgeInsets.only(bottom: 10), child: _buildSymptomItem(q, isDark))),
+            const SizedBox(height: 18),
+            _buildCheckButton(isDark),
+            const SizedBox(height: 10),
+            _buildAcrylicOutlineButton(label: context.tr('homeContinueFull'), icon: Icons.assignment_outlined, onPressed: () => Navigator.pushNamed(context, AppRoutes.fullAssessment), isDark: isDark),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildAcrylicOutlineButton({required String label, required IconData icon, required VoidCallback onPressed, required bool isDark}) {
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    return Container(
+      width: double.infinity,
+      height: 48,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        color: card.withValues(alpha: 0.88),
+        border: Border.all(color: primary.withValues(alpha: 0.45), width: 1.4),
+        boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.08), blurRadius: 12, offset: const Offset(0, 4))],
+      ),
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 18, color: primary),
+        label: Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: primary)),
+        style: ElevatedButton.styleFrom(backgroundColor: Colors.transparent, shadowColor: Colors.transparent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
       ),
     );
   }
@@ -406,74 +274,40 @@ class _HomePageState extends State<HomePage> {
     8: Icons.nightlight_outlined,
   };
 
-  Widget _buildSymptomItem(QuickCheckQuestion q) {
+  Widget _buildSymptomItem(QuickCheckQuestion q, bool isDark) {
     final isSelected = _symptomStates[q.symptomId] ?? false;
     final icon = _symptomIcons[q.symptomId] ?? Icons.help_outline;
-
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
     return GestureDetector(
       onTap: () => setState(() => _symptomStates[q.symptomId] = !isSelected),
       behavior: HitTestBehavior.opaque,
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: isSelected
-              ? AppColors.primary.withValues(alpha: 0.12)
-              : Colors.white.withValues(alpha: 0.6),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: isSelected
-                ? AppColors.primary.withValues(alpha: 0.3)
-                : Colors.white,
-            width: 1.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: (isSelected ? AppColors.primary : AppColors.primary)
-                  .withValues(alpha: 0.05),
-              blurRadius: 15,
-              offset: const Offset(0, 4),
-            ),
-          ],
+          color: isSelected ? primary.withValues(alpha: 0.12) : card.withValues(alpha: isDark ? 1.0 : 0.6),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: isSelected ? primary.withValues(alpha: 0.3) : (isDark ? AppColors.darkBorder : Colors.white), width: 1.2),
+          boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 3))],
         ),
         child: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? AppColors.primary.withValues(alpha: 0.1)
-                    : Colors.white.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(
-                icon,
-                color: isSelected
-                    ? AppColors.primary
-                    : AppColors.mutedForeground,
-                size: 20,
-              ),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: isSelected ? primary.withValues(alpha: 0.1) : (isDark ? AppColors.darkMuted : Colors.white).withValues(alpha: 0.5), borderRadius: BorderRadius.circular(10)),
+              child: Icon(icon, color: isSelected ? primary : mutedFg, size: 18),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(
-                q.questionText,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                  color: isSelected
-                      ? AppColors.foreground
-                      : AppColors.mutedForeground,
-                ),
-              ),
-            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text(q.localizedQuestionText(AppSettings.instance.locale), style: TextStyle(fontSize: 12.5, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500, color: isSelected ? fg : mutedFg))),
             Switch(
               value: isSelected,
-              onChanged: (val) =>
-                  setState(() => _symptomStates[q.symptomId] = val),
-              activeThumbColor: AppColors.primary,
-              activeTrackColor: AppColors.primary.withValues(alpha: 0.2),
+              onChanged: (val) => setState(() => _symptomStates[q.symptomId] = val),
+              activeThumbColor: primary,
+              activeTrackColor: primary.withValues(alpha: 0.2),
               inactiveThumbColor: Colors.white,
-              inactiveTrackColor: Colors.grey.withValues(alpha: 0.1),
+              inactiveTrackColor: (isDark ? AppColors.darkMuted : Colors.grey).withValues(alpha: 0.2),
             ),
           ],
         ),
@@ -481,46 +315,24 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildCheckButton() {
+  Widget _buildCheckButton(bool isDark) {
     final hasSelection = _answeredCount > 0;
-
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    final secondary = isDark ? AppColors.darkSecondary : AppColors.secondary;
+    final muted = isDark ? AppColors.darkMuted : AppColors.muted;
     return Container(
       width: double.infinity,
-      height: 58,
+      height: 48,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        gradient: LinearGradient(
-          colors: hasSelection
-              ? const [AppColors.primary, AppColors.secondary]
-              : [AppColors.muted, AppColors.muted.withValues(alpha: 0.6)],
-        ),
-        boxShadow: hasSelection
-            ? [
-                BoxShadow(
-                  color: AppColors.primary.withValues(alpha: 0.4),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ]
-            : null,
+        borderRadius: BorderRadius.circular(16),
+        gradient: LinearGradient(colors: hasSelection ? [primary, secondary] : [muted, muted.withValues(alpha: 0.6)]),
+        border: Border.all(color: hasSelection ? Colors.white.withValues(alpha: 0.9) : muted.withValues(alpha: 0.35), width: 1.2),
+        boxShadow: hasSelection ? [BoxShadow(color: primary.withValues(alpha: 0.32), blurRadius: 16, offset: const Offset(0, 8)), BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 3))] : [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: ElevatedButton(
         onPressed: (hasSelection && !_submittingQuick) ? _onCheckRisk : null,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          shadowColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-        ),
-        child: const Text(
-          'Periksa Risiko Saya',
-          style: TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
+        style: ElevatedButton.styleFrom(backgroundColor: Colors.transparent, shadowColor: Colors.transparent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+        child: Text(context.tr('homeCheckRisk'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
       ),
     );
   }
@@ -529,125 +341,30 @@ class _HomePageState extends State<HomePage> {
     if (_answeredCount == 0 || _config == null) return;
     if (_submittingQuick) return;
     setState(() => _submittingQuick = true);
-
     try {
-      // Logged-in users must reach the backend to persist. Guests submit
-      // entirely locally and don't need the network — the fallback config
-      // has real Indonesian copy so an offline submit still produces a
-      // proper result page.
-      if (!_isGuest) {
-        final online = await ConnectivityService.isOnline();
-        if (!online) {
-          _showSnack(
-            'Anda sedang offline. Periksa koneksi internet Anda lalu coba lagi.',
-          );
-          return;
-        }
-        // If we just came back online, the cached config may be stale.
-        if (!_wasOnline) {
-          await _loadConfig();
-        }
-      }
-
       if (_config == null || _config!.questions.isEmpty) {
-        _showSnack('Gagal memuat data pemeriksaan. Coba lagi sebentar.');
+        _showSnack(context.tr('homeLoadFailed'));
         return;
       }
-
       final cf = _combinedCF;
       final pct = _percentage;
       final risk = _risk;
       final matchedLevel = _matchedRiskLevel;
-
       final selectedSymptoms = <String, bool>{};
       _symptomStates.forEach((k, v) => selectedSymptoms[k.toString()] = v);
-
-      final assessmentData = {
-        'riskLevel': risk.name,
-        'combinedCF': cf,
-        'percentage': pct,
-        'riskCode': matchedLevel?.code ?? 'LOW',
-        'riskTitle': matchedLevel?.title ?? '',
-        'description': matchedLevel?.description ?? '',
-        'type': 'QUICK CHECK',
-        'symptoms': selectedSymptoms,
-      };
-
-      if (!_isGuest) {
-        // Logged-in users must persist to backend successfully before the
-        // result is shown. Otherwise the user sees a "result" that's not
-        // saved anywhere and isn't retrievable later from history.
-        final answers = <Map<String, dynamic>>[];
-        for (final q in _config!.questions) {
-          final selected = _symptomStates[q.symptomId] ?? false;
-          if (!selected) continue;
-          answers.add({'questionId': q.questionId, 'cfValue': 1.0});
-        }
-
-        if (answers.isEmpty) return;
-
-        try {
-          await AssessmentApiService.submitAssessment(
-            assessmentTypeId: 1,
-            answers: answers,
-          );
-        } catch (e) {
-          final msg = NetworkException.from(e).userMessage;
-          _showSnack(msg);
-          return;
-        }
-        // Mitigation: seed the recent-assessment cache from the submit
-        // payload itself so the home card has data even if the next
-        // _loadMostRecentAssessment fetch fails (offline or backend slow).
-        final user = await StorageService.getUser();
-        if (user?.id != null && user!.id.isNotEmpty) {
-          final cacheRecord = {
-            'createdAt': DateTime.now().toIso8601String(),
-            'assessmentTypeId': 1,
-            'assessmentTypeName': 'Quick Check',
-            'riskLevelCode': matchedLevel?.code ?? 'LOW',
-            'riskLevelTitle': matchedLevel?.title ?? 'Risiko Rendah',
-            'totalScore': pct,
-            'primaryTbTypeName': '',
-          };
-          await StorageService.saveCachedRecentAssessment(
-            user.id,
-            cacheRecord,
-          );
-          // Reflect immediately in UI; the backend fetch will overwrite later.
-          if (mounted) {
-            setState(() => _mostRecentAssessment = cacheRecord);
-          }
-        }
-        // Kick a background refresh to pick up the canonical server record.
-        if (mounted) _loadMostRecentAssessment();
-      } else {
-        // Guest path: keep result only for the current app process.
-        StorageService.guestSessionResult = assessmentData;
-        if (mounted) setState(() => _storedResult = assessmentData);
+      final assessmentData = {'riskLevel': risk.name, 'combinedCF': cf, 'percentage': pct, 'riskCode': matchedLevel?.code ?? 'LOW', 'riskTitle': matchedLevel?.title ?? '', 'description': matchedLevel?.description ?? '', 'type': 'QUICK CHECK', 'symptoms': selectedSymptoms};
+      final answers = <Map<String, dynamic>>[];
+      for (final q in _config!.questions) {
+        final selected = _symptomStates[q.symptomId] ?? false;
+        if (!selected) continue;
+        answers.add({'questionId': q.questionId, 'cfValue': 1.0});
       }
-
+      if (answers.isEmpty) return;
+      await LocalAssessmentService.submitAssessment(assessmentTypeId: 1, answers: answers);
+      await _loadMostRecent();
+      _storedResult = assessmentData;
       if (!mounted) return;
-      // Zero-duration transition so the user doesn't see the home page
-      // underneath during the standard fade+slide.
-      await Navigator.push(
-        context,
-        PageRouteBuilder(
-          settings: RouteSettings(
-            name: AppRoutes.result,
-            arguments: {
-              'riskLevel': risk,
-              'isGuest': _isGuest,
-              'percentage': pct,
-              'assessmentData': assessmentData,
-            },
-          ),
-          pageBuilder: (context, animation, secondaryAnimation) =>
-              const ResultPage(),
-          transitionDuration: Duration.zero,
-          reverseTransitionDuration: Duration.zero,
-        ),
-      );
+      await Navigator.pushNamed(context, AppRoutes.result, arguments: {'riskLevel': risk.name, 'percentage': pct, 'assessmentData': assessmentData});
     } finally {
       if (mounted) setState(() => _submittingQuick = false);
     }
@@ -655,670 +372,197 @@ class _HomePageState extends State<HomePage> {
 
   void _showSnack(String message, {Color? background}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: background ?? AppColors.destructive,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    ScaffoldMessenger.of(context)..hideCurrentSnackBar()..showSnackBar(SnackBar(content: Text(message), backgroundColor: background ?? (Theme.of(context).brightness == Brightness.dark ? AppColors.darkDestructive : AppColors.destructive), behavior: SnackBarBehavior.floating));
   }
 
-  // ─── STORED RESULT CARD ────────────────────────────────────
-  Widget _buildStoredResultCard() {
+  Widget _buildStoredResultCard(bool isDark) {
     final result = _storedResult!;
     final pct = (result['percentage'] as int?) ?? 0;
     final riskCode = (result['riskCode'] as String?) ?? 'LOW';
-    final riskTitle = (result['riskTitle'] as String?) ?? 'Risiko Rendah';
-    final color = _colorForRisk(riskCode);
+    final riskTitle = (result['riskTitle'] as String?) ?? context.tr('homeRiskLowTitle');
+    final color = _colorForRisk(riskCode, isDark);
     final icon = _iconForRisk(riskCode);
     final subtitle = _subtitleForRisk(riskCode);
     final description = _descriptionForRisk(riskCode);
     final isFullAssessment = (result['type'] as String?) == 'FULL ASSESSMENT';
+    return _buildResultContainer(isDark, pct, riskCode, riskTitle, color, icon, subtitle, description, isFullAssessment);
+  }
 
+  Widget _buildResultContainer(bool isDark, int pct, String riskCode, String riskTitle, Color color, IconData icon, String subtitle, String description, bool isFullAssessment) {
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
     return ClipRRect(
-      borderRadius: BorderRadius.circular(32),
+      borderRadius: BorderRadius.circular(24),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.7),
-          borderRadius: BorderRadius.circular(32),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.primary.withValues(alpha: 0.1),
-              blurRadius: 40,
-              offset: const Offset(0, 20),
-            ),
-          ],
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        decoration: BoxDecoration(color: card.withValues(alpha: isDark ? 1.0 : 0.7), borderRadius: BorderRadius.circular(24), border: Border.all(color: (isDark ? AppColors.darkBorder : Colors.white).withValues(alpha: 0.5)), boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.1), blurRadius: 24, offset: const Offset(0, 12))]),
         child: Column(
           children: [
-            // Title
-            const Text(
-              'Hasil Skrining Terakhir',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
-                color: AppColors.foreground,
-              ),
-            ),
-            const SizedBox(height: 10),
-
-            // Pill badge
+            Text(context.tr('homeLastResult'), textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: fg)),
+            const SizedBox(height: 8),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: color.withValues(alpha: 0.15)),
-              ),
-              child: Text(
-                isFullAssessment ? 'Pemeriksaan Lengkap' : 'Cek Cepat',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                ),
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withValues(alpha: 0.15))),
+              child: Text(isFullAssessment ? context.tr('homeFullCheck') : context.tr('homeQuickCheck'), style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: color)),
             ),
-            const SizedBox(height: 28),
-
-            // Gauge
+            const SizedBox(height: 20),
             SizedBox(
-              height: 140,
-              width: 240,
+              height: 120,
+              width: 220,
               child: Stack(
                 alignment: Alignment.bottomCenter,
                 children: [
-                  CustomPaint(
-                    size: const Size(240, 120),
-                    painter: GaugePainter(percentage: pct / 100, color: color),
-                  ),
-                  Positioned(
-                    bottom: 0,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '$pct%',
-                          style: const TextStyle(
-                            fontSize: 44,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.foreground,
-                            height: 1,
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                      ],
-                    ),
-                  ),
+                  CustomPaint(size: const Size(220, 110), painter: GaugePainter(percentage: pct / 100, color: color)),
+                  Positioned(bottom: 0, child: Column(mainAxisSize: MainAxisSize.min, children: [Text('$pct%', style: TextStyle(fontSize: 36, fontWeight: FontWeight.w900, color: fg, height: 1)), const SizedBox(height: 10)])),
                 ],
               ),
             ),
+            const SizedBox(height: 16),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(icon, color: color, size: 24), const SizedBox(width: 8), Text(riskTitle, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: fg))]),
+            const SizedBox(height: 6),
+            Text(subtitle, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+            const SizedBox(height: 18),
+            Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: color.withValues(alpha: 0.05), borderRadius: BorderRadius.circular(18), border: Border.all(color: color.withValues(alpha: 0.1))), child: Text(description, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: fg, height: 1.5))),
             const SizedBox(height: 20),
-
-            // Risk icon + title
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, color: color, size: 28),
-                const SizedBox(width: 10),
-                Text(
-                  riskTitle,
-                  style: const TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.foreground,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: color,
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Description
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.05),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: color.withValues(alpha: 0.1)),
-              ),
-              child: Text(
-                description,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.foreground,
-                  height: 1.6,
-                ),
-              ),
-            ),
-            const SizedBox(height: 28),
-
-            // Buttons — match logged-in result card logic
-            if (!isFullAssessment && riskCode.toUpperCase() != 'LOW') ...[
-              _buildResultButton(
-                'Lanjutkan Pemeriksaan Lengkap',
-                color,
-                Colors.white,
-                true,
-                onPressed: () =>
-                    Navigator.pushNamed(context, AppRoutes.fullAssessment),
-              ),
-              const SizedBox(height: 12),
+            if (!isFullAssessment) ...[
+              _buildResultButton(context.tr('homeContinueFullResult'), color, Colors.white, true, borderColor: Colors.white.withValues(alpha: 0.9), onPressed: () => Navigator.pushNamed(context, AppRoutes.fullAssessment), isDark: isDark),
+              const SizedBox(height: 10),
             ],
-            if (riskCode.toUpperCase() != 'LOW') ...[
-              _buildClinicFinderButton(color),
-              const SizedBox(height: 12),
-            ],
-            _buildResultButton(
-              'Lihat Insight Gejala',
-              Colors.transparent,
-              color,
-              false,
-              borderColor: color.withValues(alpha: 0.2),
-              onPressed: () => _openSymptomInsight(
-                color,
-                riskCode,
-                riskTitle,
-                pct,
-                isFullAssessment,
-                icon,
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildResultButton(
-              isFullAssessment
-                  ? 'Ulangi Pemeriksaan Lengkap'
-                  : 'Ulangi Cek Cepat',
-              Colors.white,
-              AppColors.mutedForeground,
-              false,
-              borderColor: AppColors.muted.withValues(alpha: 0.3),
-              onPressed: () => _onRetakeAssessment(isFullAssessment),
-            ),
+            if (riskCode.toUpperCase() != 'LOW') ...[_buildInfoCard(color, isDark), const SizedBox(height: 10)],
+            if (_isMediumRisk(riskCode)) ...[_buildNearestClinicButton(isDark), const SizedBox(height: 10)],
+            _buildResultButton(context.tr('homeViewSymptomInsight'), card.withValues(alpha: 0.88), color, false, borderColor: color.withValues(alpha: 0.42), onPressed: () => _openSymptomInsight(color, riskCode, riskTitle, pct, isFullAssessment, icon), isDark: isDark),
+            const SizedBox(height: 10),
+            _buildResultButton(isFullAssessment ? context.tr('homeRetakeFull') : context.tr('homeRetakeQuick'), card, isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground, false, borderColor: (isDark ? AppColors.darkMuted : AppColors.muted).withValues(alpha: 0.3), onPressed: () => _onRetakeAssessment(isFullAssessment), isDark: isDark),
           ],
         ),
       ),
     );
   }
 
-  /// Opens the symptom-insight detail page. Guests reconstruct the detail purely
-  /// from their locally stored result snapshot — never by refetching a config,
-  /// whose IDs may differ from the ones used at submit time (that mismatch is
-  /// what produced phantom TB-type symptoms). Logged-in users pass a sessionKey
-  /// and HistoryDetailPage fetches the canonical detail from the backend.
-  Future<void> _openSymptomInsight(
-    Color color,
-    String riskCode,
-    String riskTitle,
-    int pct,
-    bool isFullAssessment,
-    IconData icon, {
-    String? sessionKey,
-  }) async {
-    Map<String, dynamic>? detail;
+  bool _isMediumRisk(String code) {
+    final c = code.toUpperCase();
+    return c.contains('MEDIUM') || c.contains('MODERATE') || c.contains('SEDANG');
+  }
 
-    if (_isGuest) {
-      final stored = _storedResult;
-      if (stored != null) {
-        detail = isFullAssessment
-            ? _buildGuestFullDetail(stored, pct, riskTitle, riskCode)
-            : _buildGuestQuickDetail(stored, pct, riskTitle, riskCode);
-      }
-    }
-    // Authenticated insight requires a live backend fetch (architecture:
-    // authenticated = online-required). The `requiresOnline` flag makes
-    // HistoryDetailPage enforce connectivity, resolve the sessionKey, and show a
-    // full-page no-internet handler on failure — never a silent empty page.
-
-    if (!mounted) return;
-    Navigator.pushNamed(
-      context,
-      AppRoutes.historyDetail,
-      arguments: {
-        'sessionKey': sessionKey ?? '',
-        'requiresOnline': !_isGuest,
-        'date': 'Sekarang',
-        'riskLevel': riskTitle,
-        'riskLevelCode': riskCode,
-        'percentage': '$pct%',
-        'tbType': '',
-        'type': isFullAssessment ? 'Pemeriksaan Lengkap' : 'Cek Cepat',
-        'color': color,
-        'icon': icon,
-        'detailData': detail,
-      },
+  Widget _buildNearestClinicButton(bool isDark) {
+    final warning = isDark ? AppColors.darkWarning : AppColors.warning;
+    return Container(
+      width: double.infinity,
+      height: 48,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        color: warning,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.9), width: 1.1),
+        boxShadow: [BoxShadow(color: warning.withValues(alpha: 0.28), blurRadius: 12, offset: const Offset(0, 6)), BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: ElevatedButton.icon(
+        onPressed: () => UrlUtils.launchNearestClinicMap(context),
+        icon: const Icon(Icons.location_on_rounded, size: 18, color: Colors.white),
+        label: Text(context.tr('clinicNearestButton'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white)),
+        style: ElevatedButton.styleFrom(backgroundColor: Colors.transparent, shadowColor: Colors.transparent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+      ),
     );
   }
 
-  /// Builds the insight detail for a guest FULL assessment from the stored
-  /// `fullResults` snapshot (saved at submit time). One item per TB type that
-  /// received at least one selected symptom. No network/config dependency.
-  Map<String, dynamic>? _buildGuestFullDetail(
-    Map<String, dynamic> stored,
-    int pct,
-    String riskTitle,
-    String riskCode,
-  ) {
+  Future<void> _openSymptomInsight(Color color, String riskCode, String riskTitle, int pct, bool isFullAssessment, IconData icon, {String? sessionKey}) async {
+    Map<String, dynamic>? detail;
+    final stored = _storedResult;
+    if (stored != null && _config != null) {
+      detail = isFullAssessment ? _buildGuestFullDetail(stored, pct, riskTitle, riskCode) : _buildGuestQuickDetail(stored, pct, riskTitle, riskCode);
+    }
+    if (!mounted) return;
+    Navigator.pushNamed(context, AppRoutes.historyDetail, arguments: {'sessionKey': sessionKey ?? '', 'date': context.tr('historyDateNow'), 'riskLevel': riskTitle, 'riskLevelCode': riskCode, 'percentage': '$pct%', 'tbType': '', 'type': isFullAssessment ? context.tr('homeFullCheck') : context.tr('homeQuickCheck'), 'color': color, 'icon': icon, 'detailData': detail});
+  }
+
+  Map<String, dynamic>? _buildGuestFullDetail(Map<String, dynamic> stored, int pct, String riskTitle, String riskCode) {
     final results = stored['fullResults'] as List<dynamic>?;
     if (results == null) return null;
-
     final items = <Map<String, dynamic>>[];
     for (final r in results) {
       if (r is! Map) continue;
       final rl = r['riskLevel'] as Map<String, dynamic>?;
       final symptomDetails = (r['symptomDetails'] as List<dynamic>?) ?? [];
-      final selected = symptomDetails
-          .where(
-            (s) => s is Map && ((s['cfValue'] as num?)?.toDouble() ?? 0) > 0,
-          )
-          .map((s) {
-            final m = s as Map;
-            return {
-              'symptomName': m['symptomName'] ?? '-',
-              'symptomCode': m['symptomCode'] ?? '',
-              'symptomDescription': m['symptomDescription'],
-              'cfValue': 1.0,
-              'tbTypeId': (m['originTbTypeId'] as num?)?.toInt() ??
-                  (r['tbTypeId'] as num?)?.toInt() ??
-                  0,
-            };
-          })
-          .toList();
+      final selected = symptomDetails.where((s) => s is Map && ((s['cfValue'] as num?)?.toDouble() ?? 0) > 0).map((s) {
+        final m = s as Map;
+        return {'symptomName': m['symptomName'] ?? '-', 'symptomCode': m['symptomCode'] ?? '', 'symptomDescription': m['symptomDescription'], 'cfValue': 1.0, 'tbTypeId': (m['originTbTypeId'] as num?)?.toInt() ?? (r['tbTypeId'] as num?)?.toInt() ?? 0};
+      }).toList();
       if (selected.isEmpty) continue;
-      items.add({
-        'primaryTbTypeId': (r['tbTypeId'] as num?)?.toInt() ?? 0,
-        'primaryTbTypeName': r['tbTypeName'] ?? 'Unknown',
-        'totalScore': (r['totalScore'] as num?)?.toDouble() ?? 0,
-        'riskLevelTitle': rl?['title'] ?? riskTitle,
-        'riskLevelCode': rl?['code'] ?? riskCode,
-        'selectedSymptoms': selected,
-        'scoreBreakdown': {
-          'results': [
-            {
-              'riskLevel': {'recommendation': rl?['recommendation'] ?? ''},
-            },
-          ],
-        },
-      });
+      items.add({'primaryTbTypeId': (r['tbTypeId'] as num?)?.toInt() ?? 0, 'primaryTbTypeName': r['tbTypeName'] ?? 'Unknown', 'totalScore': (r['totalScore'] as num?)?.toDouble() ?? 0, 'riskLevelTitle': rl?['title'] ?? riskTitle, 'riskLevelCode': rl?['code'] ?? riskCode, 'selectedSymptoms': selected, 'scoreBreakdown': {'results': [{'riskLevel': {'recommendation': rl?['recommendation'] ?? ''}}]}});
     }
-
-    return {
-      'items': items,
-      'createdAt': DateTime.now().toIso8601String(),
-      'assessmentTypeName': 'Full Assessment',
-    };
+    return {'items': items, 'createdAt': DateTime.now().toIso8601String(), 'assessmentTypeName': 'Full Assessment'};
   }
 
-  /// Builds the insight detail for a guest QUICK check from the stored symptom
-  /// map. Quick check is single-TB-type (Paru); `_config` (the faithful
-  /// bundled/real config) maps the selected symptomIds back to names/codes.
-  Map<String, dynamic>? _buildGuestQuickDetail(
-    Map<String, dynamic> stored,
-    int pct,
-    String riskTitle,
-    String riskCode,
-  ) {
+  Map<String, dynamic>? _buildGuestQuickDetail(Map<String, dynamic> stored, int pct, String riskTitle, String riskCode) {
     if (_config == null) return null;
     final symptoms = stored['symptoms'] as Map<String, dynamic>? ?? {};
-
     final selected = <Map<String, dynamic>>[];
     for (final q in _config!.questions) {
       if (symptoms[q.symptomId.toString()] != true) continue;
-      selected.add({
-        'symptomName': q.symptomName,
-        'symptomCode': q.symptomCode,
-        'symptomDescription': q.symptomDescription,
-        'cfValue': 1.0,
-        'tbTypeId': q.tbTypeId,
-      });
+      selected.add({'symptomName': q.symptomName, 'symptomCode': q.symptomCode, 'symptomDescription': q.symptomDescription, 'cfValue': 1.0, 'tbTypeId': q.tbTypeId});
     }
     if (selected.isEmpty) return null;
-
     return {
-      'items': [
-        {
-          'primaryTbTypeId': 1,
-          'primaryTbTypeName': _config!.questions.first.tbTypeName ?? 'TBC Paru',
-          'totalScore': pct.toDouble(),
-          'riskLevelTitle': riskTitle,
-          'riskLevelCode': riskCode,
-          'selectedSymptoms': selected,
-          'scoreBreakdown': {
-            'results': [
-              {
-                'riskLevel': {'recommendation': stored['description'] ?? ''},
-              },
-            ],
-          },
-        },
-      ],
+      'items': [{'primaryTbTypeId': 1, 'primaryTbTypeName': _config!.questions.first.tbTypeName ?? 'TBC Paru', 'totalScore': pct.toDouble(), 'riskLevelTitle': riskTitle, 'riskLevelCode': riskCode, 'selectedSymptoms': selected, 'scoreBreakdown': {'results': [{'riskLevel': {'recommendation': stored['description'] ?? ''}}]}}],
       'createdAt': DateTime.now().toIso8601String(),
-      'assessmentTypeName': 'Quick Assessment',
+      'assessmentTypeName': 'Quick Assessment'
     };
   }
 
-  Widget _buildClinicFinderButton(Color color) {
+  Widget _buildInfoCard(Color color, bool isDark) {
+    return Container(width: double.infinity, padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: color.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(16), border: Border.all(color: color.withValues(alpha: 0.2))), child: Row(children: [Icon(Icons.info_outline_rounded, color: color, size: 20), const SizedBox(width: 10), Expanded(child: Text(context.tr('homeInfoIfRisk'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color, height: 1.4)))]));
+  }
+
+  Widget _buildResultButton(String text, Color bgColor, Color textColor, bool hasShadow, {Color? borderColor, VoidCallback? onPressed, required bool isDark}) {
     return Container(
       width: double.infinity,
-      height: 52,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        gradient: LinearGradient(
-          colors: [
-            color.withValues(alpha: 0.08),
-            color.withValues(alpha: 0.15),
-          ],
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-        ),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
-      ),
-      child: ElevatedButton(
-        onPressed: () => UrlUtils.launchNearestClinicMap(context),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          shadowColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.location_on_rounded, color: color, size: 20),
-            const SizedBox(width: 8),
-            Text(
-              'Cari Faskes Terdekat',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Icon(
-              Icons.open_in_new_rounded,
-              color: color.withValues(alpha: 0.6),
-              size: 16,
-            ),
-          ],
-        ),
-      ),
+      height: 48,
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), color: bgColor, border: borderColor != null ? Border.all(color: borderColor, width: 1.2) : Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1), boxShadow: hasShadow ? [BoxShadow(color: bgColor.withValues(alpha: 0.28), blurRadius: 12, offset: const Offset(0, 6)), BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 2))] : [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 3))]),
+      child: ElevatedButton(onPressed: onPressed ?? () {}, style: ElevatedButton.styleFrom(backgroundColor: Colors.transparent, shadowColor: Colors.transparent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))), child: Text(text, style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: textColor))),
     );
   }
 
-  Widget _buildResultButton(
-    String text,
-    Color bgColor,
-    Color textColor,
-    bool hasShadow, {
-    Color? borderColor,
-    VoidCallback? onPressed,
-  }) {
-    return Container(
-      width: double.infinity,
-      height: 52,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        color: bgColor,
-        border: borderColor != null ? Border.all(color: borderColor) : null,
-        boxShadow: hasShadow
-            ? [
-                BoxShadow(
-                  color: bgColor.withValues(alpha: 0.4),
-                  blurRadius: 15,
-                  offset: const Offset(0, 8),
-                ),
-              ]
-            : null,
-      ),
-      child: ElevatedButton(
-        onPressed: onPressed ?? () {},
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          shadowColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-          ),
-        ),
-        child: Text(
-          text,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.bold,
-            color: textColor,
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ─── LOGGED-IN USER RESULT CARD ────────────────────────────────────
-  Widget _buildLoggedInResultCard() {
-    if (_mostRecentAssessment == null) {
-      return _buildAssessmentCard();
-    }
-
+  Widget _buildRecentResultCard(bool isDark) {
+    if (_mostRecentAssessment == null) return _buildAssessmentCard(isDark);
     final assessment = _mostRecentAssessment!;
-
-    // Extract the most recent result info
     final assessmentTypeId = assessment['assessmentTypeId'] as int? ?? 1;
     final riskLevelCode = assessment['riskLevelCode'] as String? ?? 'LOW';
-    final riskLevelTitle =
-        assessment['riskLevelTitle'] as String? ?? 'Low Risk';
+    final riskLevelTitle = assessment['riskLevelTitle'] as String? ?? context.tr('homeRiskLowTitle');
     final totalScore = assessment['totalScore'] as num? ?? 0;
     final pct = totalScore.toInt();
-
-    // For full assessment, we might have multiple results - just show the main risk
-    String primaryRiskCode = riskLevelCode;
-    String primaryRiskTitle = riskLevelTitle;
-
-    final color = _colorForRisk(primaryRiskCode);
-    final icon = _iconForRisk(primaryRiskCode);
-    final subtitle = _subtitleForRisk(primaryRiskCode);
-    final description = _descriptionForRisk(primaryRiskCode);
-
+    final color = _colorForRisk(riskLevelCode, isDark);
+    final subtitle = _subtitleForRisk(riskLevelCode);
+    final description = _descriptionForRisk(riskLevelCode);
     final isFullAssessment = assessmentTypeId == 2;
-    final assessmentBadge = isFullAssessment
-        ? 'Pemeriksaan Lengkap'
-        : 'Cek Cepat';
-
+    final assessmentBadge = isFullAssessment ? context.tr('homeFullCheck') : context.tr('homeQuickCheck');
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
     return ClipRRect(
-      borderRadius: BorderRadius.circular(32),
+      borderRadius: BorderRadius.circular(24),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.7),
-          borderRadius: BorderRadius.circular(32),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.primary.withValues(alpha: 0.1),
-              blurRadius: 40,
-              offset: const Offset(0, 20),
-            ),
-          ],
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        decoration: BoxDecoration(color: card.withValues(alpha: isDark ? 1.0 : 0.7), borderRadius: BorderRadius.circular(24), border: Border.all(color: (isDark ? AppColors.darkBorder : Colors.white).withValues(alpha: 0.5)), boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.1), blurRadius: 24, offset: const Offset(0, 12))]),
         child: Column(
           children: [
-            // Title
-            const Text(
-              'Hasil Skrining Terakhir',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
-                color: AppColors.foreground,
-              ),
-            ),
-            const SizedBox(height: 10),
-
-            // Pill badge
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: color.withValues(alpha: 0.15)),
-              ),
-              child: Text(
-                assessmentBadge,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                ),
-              ),
-            ),
-            const SizedBox(height: 28),
-
-            // Gauge
-            SizedBox(
-              height: 140,
-              width: 240,
-              child: Stack(
-                alignment: Alignment.bottomCenter,
-                children: [
-                  CustomPaint(
-                    size: const Size(240, 120),
-                    painter: GaugePainter(percentage: pct / 100, color: color),
-                  ),
-                  Positioned(
-                    bottom: 0,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '$pct%',
-                          style: const TextStyle(
-                            fontSize: 44,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.foreground,
-                            height: 1,
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Risk icon + title
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, color: color, size: 28),
-                const SizedBox(width: 10),
-                Text(
-                  primaryRiskTitle,
-                  style: const TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.foreground,
-                  ),
-                ),
-              ],
-            ),
+            Text(context.tr('homeLastResult'), textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: fg)),
             const SizedBox(height: 8),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: color,
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Description
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.05),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: color.withValues(alpha: 0.1)),
-              ),
-              child: Text(
-                description,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.foreground,
-                  height: 1.6,
-                ),
-              ),
-            ),
-            const SizedBox(height: 28),
-
-            // Buttons - different based on assessment type
-            if (!isFullAssessment &&
-                primaryRiskCode.toUpperCase() != 'LOW') ...[
-              _buildResultButton(
-                'Lanjutkan Pemeriksaan Lengkap',
-                color,
-                Colors.white,
-                true,
-                onPressed: () =>
-                    Navigator.pushNamed(context, AppRoutes.fullAssessment),
-              ),
-              const SizedBox(height: 12),
-            ],
-            if (primaryRiskCode.toUpperCase() != 'LOW') ...[
-              _buildClinicFinderButton(color),
-              const SizedBox(height: 12),
-            ],
-            _buildResultButton(
-              'Lihat Insight Gejala',
-              Colors.transparent,
-              color,
-              false,
-              borderColor: color.withValues(alpha: 0.2),
-              onPressed: () => _openSymptomInsight(
-                color,
-                primaryRiskCode,
-                primaryRiskTitle,
-                pct,
-                isFullAssessment,
-                _iconForRisk(primaryRiskCode),
-                sessionKey: assessment['sessionKey'] as String?,
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildResultButton(
-              isFullAssessment
-                  ? 'Ulangi Pemeriksaan Lengkap'
-                  : 'Ulangi Cek Cepat',
-              Colors.white,
-              AppColors.mutedForeground,
-              false,
-              borderColor: AppColors.muted.withValues(alpha: 0.3),
-              onPressed: () => _onRetakeAssessment(isFullAssessment),
-            ),
+            Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5), decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withValues(alpha: 0.15))), child: Text(assessmentBadge, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: color))),
+            const SizedBox(height: 20),
+            SizedBox(height: 120, width: 220, child: Stack(alignment: Alignment.bottomCenter, children: [CustomPaint(size: const Size(220, 110), painter: GaugePainter(percentage: pct / 100, color: color)), Positioned(bottom: 0, child: Column(mainAxisSize: MainAxisSize.min, children: [Text('$pct%', style: TextStyle(fontSize: 36, fontWeight: FontWeight.w900, color: fg, height: 1)), const SizedBox(height: 10)]))])),
+            const SizedBox(height: 16),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(_iconForRisk(riskLevelCode), color: color, size: 24), const SizedBox(width: 8), Text(riskLevelTitle, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: fg))]),
+            const SizedBox(height: 6),
+            Text(subtitle, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+            const SizedBox(height: 18),
+            Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: color.withValues(alpha: 0.05), borderRadius: BorderRadius.circular(18), border: Border.all(color: color.withValues(alpha: 0.1))), child: Text(description, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: fg, height: 1.5))),
+            const SizedBox(height: 20),
+            if (!isFullAssessment) ...[_buildResultButton(context.tr('homeContinueFullResult'), color, Colors.white, true, borderColor: Colors.white.withValues(alpha: 0.9), onPressed: () => Navigator.pushNamed(context, AppRoutes.fullAssessment), isDark: isDark), const SizedBox(height: 10)],
+            if (riskLevelCode.toUpperCase() != 'LOW') ...[_buildInfoCard(color, isDark), const SizedBox(height: 10)],
+            if (_isMediumRisk(riskLevelCode)) ...[_buildNearestClinicButton(isDark), const SizedBox(height: 10)],
+            _buildResultButton(context.tr('homeViewSymptomInsight'), card.withValues(alpha: 0.88), color, false, borderColor: color.withValues(alpha: 0.42), onPressed: () => _openSymptomInsight(color, riskLevelCode, riskLevelTitle, pct, isFullAssessment, _iconForRisk(riskLevelCode), sessionKey: assessment['sessionKey'] as String?), isDark: isDark),
+            const SizedBox(height: 10),
+            _buildResultButton(isFullAssessment ? context.tr('homeRetakeFull') : context.tr('homeRetakeQuick'), card, isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground, false, borderColor: (isDark ? AppColors.darkMuted : AppColors.muted).withValues(alpha: 0.3), onPressed: () => _onRetakeAssessment(isFullAssessment), isDark: isDark),
           ],
         ),
       ),
@@ -1326,30 +570,18 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _onRetakeAssessment(bool isFullAssessment) async {
-    if (isFullAssessment) {
-      Navigator.pushNamed(context, AppRoutes.fullAssessment);
-    } else {
-      StorageService.guestSessionResult = null;
-      setState(() {
-        _storedResult = null;
-        if (_config != null) {
-          _symptomStates = {
-            for (final q in _config!.questions) q.symptomId: false,
-          };
-        }
-        _mostRecentAssessment = null;
-      });
-    }
+    if (isFullAssessment) Navigator.pushNamed(context, AppRoutes.fullAssessment);
+    else setState(() {_storedResult = null; if (_config != null) _symptomStates = {for (final q in _config!.questions) q.symptomId: false}; _mostRecentAssessment = null;});
   }
 
-  Color _colorForRisk(String code) {
+  Color _colorForRisk(String code, bool isDark) {
     switch (code.toUpperCase()) {
       case 'HIGH':
-        return AppColors.destructive;
+        return isDark ? AppColors.darkDestructive : AppColors.destructive;
       case 'MEDIUM':
-        return AppColors.warning;
+        return isDark ? AppColors.darkWarning : AppColors.warning;
       default:
-        return AppColors.primary;
+        return isDark ? AppColors.darkPrimary : AppColors.primary;
     }
   }
 
@@ -1367,57 +599,54 @@ class _HomePageState extends State<HomePage> {
   String _subtitleForRisk(String code) {
     switch (code.toUpperCase()) {
       case 'HIGH':
-        return 'Indikasi kuat gejala TBC';
+        return context.tr('homeHighSubtitle');
       case 'MEDIUM':
-        return 'Beberapa gejala memerlukan perhatian';
+        return context.tr('homeMediumSubtitle');
       default:
-        return 'Anda menunjukkan indikasi rendah TBC';
+        return context.tr('homeLowSubtitle');
     }
   }
 
   String _descriptionForRisk(String code) {
     switch (code.toUpperCase()) {
       case 'HIGH':
-        return 'Gejala Anda sangat mengindikasikan potensi TBC. Silakan lanjutkan dengan pemeriksaan lengkap dan cari bantuan medis.';
+        return context.tr('homeHighDesc');
       case 'MEDIUM':
-        return 'Anda menunjukkan beberapa gejala terkait TBC. Disarankan untuk melanjutkan dengan pemeriksaan yang lebih detail.';
+        return context.tr('homeMediumDesc');
       default:
-        return 'Gejala Anda saat ini tidak secara kuat mengindikasikan TBC. Jaga kesehatan dan pantau kondisi Anda.';
+        return context.tr('homeLowDesc');
     }
   }
 
-  Widget _buildScatteredAuras(double sw, double sh) {
-    return Stack(
-      children: [
-        Positioned(
-          top: -50,
-          right: -50,
-          child: _buildAura(150, AppColors.primary.withValues(alpha: 0.1)),
-        ),
-        Positioned(
-          top: sh * 0.2,
-          left: -100,
-          child: _buildAura(180, AppColors.secondary.withValues(alpha: 0.05)),
-        ),
-        Positioned(
-          bottom: 100,
-          right: 20,
-          child: _buildAura(100, AppColors.muted.withValues(alpha: 0.1)),
-        ),
-      ],
-    );
+  Widget _buildScatteredAuras(double sw, double sh, bool isDark) {
+    return Stack(children: [
+      Positioned(top: -50, right: -50, child: _buildAura(130, (isDark ? AppColors.darkPrimary : AppColors.primary).withValues(alpha: 0.1))),
+      Positioned(top: sh * 0.2, left: -80, child: _buildAura(150, (isDark ? AppColors.darkSecondary : AppColors.secondary).withValues(alpha: 0.05))),
+      Positioned(bottom: 80, right: 20, child: _buildAura(90, (isDark ? AppColors.darkMuted : AppColors.muted).withValues(alpha: 0.1))),
+    ]);
   }
 
-  Widget _buildAura(double size, Color color) {
-    return Container(
-      width: size * 2,
-      height: size * 2,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(color: color, blurRadius: size, spreadRadius: size / 2),
-        ],
-      ),
-    );
+  Widget _buildAura(double size, Color color) => Container(width: size * 2, height: size * 2, decoration: BoxDecoration(shape: BoxShape.circle, boxShadow: [BoxShadow(color: color, blurRadius: size, spreadRadius: size / 2)]));
+}
+
+class GaugePainter extends CustomPainter {
+  final double percentage;
+  final Color color;
+  GaugePainter({required this.percentage, required this.color});
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height);
+    final radius = size.width / 2;
+    final paint = Paint()..style = PaintingStyle.stroke..strokeWidth = 12..strokeCap = StrokeCap.round;
+    paint.color = color.withValues(alpha: 0.15);
+    canvas.drawArc(Rect.fromCircle(center: center, radius: radius), math.pi, math.pi, false, paint);
+    paint.color = color;
+    canvas.drawArc(Rect.fromCircle(center: center, radius: radius), math.pi, math.pi * percentage.clamp(0.0, 1.0), false, paint);
+    final angle = math.pi + math.pi * percentage.clamp(0.0, 1.0);
+    final dot = Offset(center.dx + radius * math.cos(angle), center.dy + radius * math.sin(angle));
+    canvas.drawCircle(dot, 6, Paint()..color = Colors.white);
+    canvas.drawCircle(dot, 4, Paint()..color = color);
   }
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }

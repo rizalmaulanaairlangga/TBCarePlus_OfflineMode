@@ -1,25 +1,20 @@
 import 'package:flutter/material.dart';
-import '../features/auth/pages/cover_page.dart';
-import '../features/auth/pages/login_page.dart';
-import '../features/auth/pages/register_page.dart';
+import '../features/splash/pages/splash_page.dart';
 import '../features/home/pages/home_page.dart';
 import '../features/assessment/pages/full_assessment_page.dart';
 import '../features/result/pages/result_page.dart';
 import '../features/history/pages/history_page.dart';
 import '../features/history/pages/history_detail_page.dart';
 import '../features/profile/pages/profile_page.dart';
-import '../features/profile/pages/edit_profile_page.dart';
-import '../features/profile/pages/change_password_page.dart';
 import '../features/about/pages/about_page.dart';
+import '../features/settings/pages/settings_page.dart';
 
 class AppRoutes {
   static final GlobalKey<NavigatorState> navigatorKey =
       GlobalKey<NavigatorState>();
 
-  static const String cover = '/';
-  static const String login = '/login';
-  static const String register = '/register';
-  static const String home = '/home';
+  static const String splash = '/splash';
+  static const String home = '/';
   static const String fullAssessment = '/full-assessment';
   static const String result = '/result';
   static const String history = '/history';
@@ -28,11 +23,10 @@ class AppRoutes {
   static const String editProfile = '/edit-profile';
   static const String changePassword = '/change-password';
   static const String about = '/about';
+  static const String settings = '/settings';
 
   static Map<String, WidgetBuilder> get routes => {
-    cover: (context) => const CoverPage(),
-    login: (context) => const LoginPage(),
-    register: (context) => const RegisterPage(),
+    splash: (context) => const SplashPage(),
     home: (context) => const HomePage(),
     fullAssessment: (context) => const FullAssessmentPage(),
     result: (context) => const ResultPage(),
@@ -44,8 +38,7 @@ class AppRoutes {
       return HistoryDetailPage(item: args, detail: detail);
     },
     profile: (context) => const ProfilePage(),
-    editProfile: (context) => const EditProfilePage(),
-    changePassword: (context) => const ChangePasswordPage(),
     about: (context) => const AboutPage(),
+    settings: (context) => const SettingsPage(),
   };
 }

@@ -1,68 +1,45 @@
-# TBCare+
+# TBCare+ (Offline Open-Source)
 
-TBCare+ is a tuberculosis early-detection expert system mobile app built with **Flutter**. It provides symptom-based screening, certainty-factor assessment, and personalized health insights.
+TBCare+ is an offline-first tuberculosis early-detection expert system built with **Flutter**. All screening, scoring, and history are stored locally on-device with `hive_ce` — no backend, no Supabase, no internet required.
 
 ## Features
 
-- **Authentication** — Login, registration, guest mode with Supabase JWT. Sessions persist
-  across restarts and the access token is **silently refreshed** in the background; the user
-  is only returned to login if the refresh token itself is rejected.
-- **Quick Check & Full Assessment** — Two-tier TB screening with wizard-guided forms
-- **Expert System Scoring** — Cross-TB-type certainty factor calculation
-- **Assessment History** — Session-grouped history with detailed symptom insights
-- **Profile Management** — Edit profile, change password, profile picture upload
-- **Offline Support** — Guests can complete an assessment with results kept in memory
-  for the current session; question configs are cached after first fetch as an offline
-  fallback. Authenticated actions require connectivity and persist to the server.
+- **Quick Check & Full Assessment** — Two-tier TB screening with wizard-guided forms (8 + 41 questions)
+- **Expert System Scoring** — Local certainty-factor calculation: `quick = sumSelected/totalWeight`, `full = 1 - exp(-0.35 * sum)`, threshold HIGH `>75%` (medium `58.01-75`, low `0-58`), variant fan-out `G01a` → all TB types
+- **Assessment History** — Hive box `histories` grouped by second, sessionKey `base64Url(typeId|iso)`, with `Hapus Riwayat` (clear) support
+- **100% Offline** — Knowledge base bundled in `assets/config/*.json`, no login/guest, no `shared_preferences`, no maps
+- **Open-Source** — MIT, no secrets, `flutter pub get && flutter run` is enough
 
 ## Tech Stack
 
 - **Framework**: Flutter (Dart 3.12+)
-- **Auth**: Supabase JWT with automatic (silent) token refresh
-- **HTTP**: `http`
-- **Local Storage**: `shared_preferences` (tokens, cached configs)
-- **Connectivity**: `connectivity_plus` (offline pre-flight gating)
-- **Files & Images**: `file_picker`, `image` (profile picture pick/encode)
-- **Misc**: `intl` (date formatting), `url_launcher` (external links)
+- **Local Storage**: `hive_ce` + `hive_ce_flutter` + `path_provider` (box `histories` + `meta`)
+- **Bundle**: `assets/config/quick_check_config.json` + `full_assessment_config.json` (captured from `tbcare_plus` DB, 4 tb_types, 41 symptoms, 12 risk_levels)
+- **Files & Images**: `file_picker`, `image`
+- **Misc**: `intl` (date formatting), `package_info_plus`
 
 ## Getting Started
 
 ### Prerequisites
 
 - Flutter SDK 3.22+
-- Android Studio or Xcode
 
-### Setup
+### Setup & Run (no backend, no .env)
 
 ```bash
 git clone https://github.com/rizalmaulanaairlangga/tbcare-plus-mobile.git
 cd tbcare-plus-mobile
 flutter pub get
-```
-
-### Backend Configuration
-
-Copy `.env.example` to `.env` and fill in your backend URL:
-
-```bash
-cp .env.example .env
-```
-
-The `.env` file contains three settings:
-
-```env
-API_BASE_URL=https://your-backend-api.azurewebsites.net
-API_LOCAL_URL=http://localhost:5181
-USE_LOCAL=false
-```
-
-For local development, set `USE_LOCAL=true` to point the app at `http://localhost:5181` (Android emulator users automatically get `http://10.0.2.2:5181`).
-
-### Run
-
-```bash
 flutter run
 ```
+
+No `.env` needed. No `dotnet run`. Works in airplane mode.
+
+## Scoring
+
+- Config loaded via `rootBundle` → `QuickCheckConfig.fromJson` (`lib/core/models/assessment_config_models.dart`)
+- Submit via `LocalAssessmentService.submitAssessment` (`lib/core/services/local_assessment_service.dart`) — port of `AssessmentController.cs:298-563`
+- History via Hive — `fetchHistorySessions` / `fetchHistorySessionDetail` / `clearHistory`
 
 ## Build Release
 
@@ -70,31 +47,29 @@ flutter run
 flutter build apk --split-per-abi
 ```
 
-APKs output to `build/app/outputs/flutter-apk/`.
-
-For keystore setup, see the [Flutter Android deployment guide](https://docs.flutter.dev/deployment/android).
+APKs output to `build/app/outputs/flutter-apk/` (<50 MB, no internet permission required).
 
 ## Project Structure
 
 ```
 lib/
 ├── core/
-│   ├── constants/    # API endpoints, base URL toggle, prefs keys
-│   ├── models/       # Data models, JSON serializers
-│   ├── services/     # Auth/assessment API, storage, connectivity, guest
-│   │                 #   assessment, session, asset caching. Authenticated
-│   │                 #   calls go through authorized_client (auto-attaches the
-│   │                 #   Bearer token) + token_service (silent refresh-and-retry)
-│   ├── utils/        # NetworkException, image & URL helpers
+│   ├── constants/    # Hive box names
+│   ├── db/           # HiveInit (init + boxes)
+│   ├── models/       # assessment_config_models, auth_models (legacy)
+│   ├── services/     # local_assessment_service (offline scoring + history)
 │   ├── theme/        # Colors, text styles, theme
-│   └── widgets/      # Shared widgets (HomeHeader, AppTopBar)
+│   └── widgets/      # Shared widgets (HomeHeader, AppTopBar, AppBottomNav)
 ├── features/
-│   ├── auth/         # Cover, login, register pages
-│   ├── home/         # Home dashboard
-│   ├── assessment/   # Quick check & full assessment wizards
+│   ├── home/         # Home dashboard (offline)
+│   ├── assessment/   # Full assessment wizard (offline)
 │   ├── result/       # Assessment results with scoring
-│   ├── history/      # History list, detail, symptom insights
-│   ├── profile/      # Profile view, edit, change password
+│   ├── history/      # History list, detail + Hapus Semua
+│   ├── profile/      # Tentang + Hapus Data Lokal
 │   └── about/        # About & help page
-└── routes/           # Named route definitions
+└── routes/           # Named routes (home '/' → HomePage)
 ```
+
+## Data Source
+
+Offline bundle generated from Supabase `tbcare_plus` schema (`tbcare-plus-backend/Data/init.sql`): `tb_types`, `symptoms`, `risk_rules`, `risk_levels` (HIGH >75%). Regenerate `assets/config/*.json` when DB changes.

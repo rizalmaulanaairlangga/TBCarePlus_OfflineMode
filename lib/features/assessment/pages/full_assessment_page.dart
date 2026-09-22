@@ -1,12 +1,14 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:hive_ce_flutter/hive_flutter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../routes/app_routes.dart';
-import '../../../core/services/storage_service.dart';
-import '../../../core/services/assessment_api_service.dart';
-import '../../../core/services/connectivity_service.dart';
+import '../../../core/services/local_assessment_service.dart';
 import '../../../core/models/assessment_config_models.dart';
-import '../../../core/utils/network_exception.dart';
+import '../../../core/l10n/l10n.dart';
+import '../../../core/l10n/tb_content_l10n.dart';
+import '../../../core/widgets/responsive_center.dart';
+import '../../../core/settings/app_settings.dart';
 
 class FullAssessmentPage extends StatefulWidget {
   const FullAssessmentPage({super.key});
@@ -18,26 +20,101 @@ class _FullAssessmentPageState extends State<FullAssessmentPage> {
   QuickCheckConfig? _config;
   bool _loading = true;
   String? _error;
-  bool _isCheckingAuth = true;
-  bool _isLoggedIn = false;
   final Map<int, bool> _answerStates = {};
   int _currentStep = 0;
   bool _submitting = false;
 
+  static const String _kDraftAnswers = 'full_draft_answers';
+  static const String _kDraftStep = 'full_draft_step';
+
   @override
   void initState() {
     super.initState();
-    _initSessionAndLoad();
+    AppSettings.instance.addListener(_onLocaleChanged);
+    _loadConfig();
   }
 
-  Future<void> _initSessionAndLoad() async {
-    final loggedIn = await StorageService.isLoggedIn();
-    if (!mounted) return;
+  void _onLocaleChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    AppSettings.instance.removeListener(_onLocaleChanged);
+    super.dispose();
+  }
+
+  void _persistDraft() {
+    try {
+      final box = Hive.box('meta');
+      final map = _answerStates.map((k, v) => MapEntry(k.toString(), v));
+      box.put(_kDraftAnswers, map);
+      box.put(_kDraftStep, _currentStep);
+    } catch (_) {}
+  }
+
+  void _loadDraft() {
+    try {
+      final box = Hive.box('meta');
+      final raw = box.get(_kDraftAnswers);
+      if (raw is Map) {
+        for (final e in raw.entries) {
+          final qid = int.tryParse(e.key.toString());
+          if (qid != null && _answerStates.containsKey(qid)) {
+            _answerStates[qid] = e.value == true;
+          }
+        }
+      }
+      final step = box.get(_kDraftStep);
+      if (step is int && step >= 0 && step < _totalSteps) {
+        _currentStep = step;
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _clearDraft() async {
+    try {
+      final box = Hive.box('meta');
+      await box.delete(_kDraftAnswers);
+      await box.delete(_kDraftStep);
+    } catch (_) {}
+  }
+
+  Future<void> _resetForm() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
+          title: Text(context.tr('fullResetConfirmTitle')),
+          content: Text(context.tr('fullResetConfirmDesc')),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(context.tr('cancel'))),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: isDark ? AppColors.darkDestructive : AppColors.destructive),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(context.tr('delete')),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
     setState(() {
-      _isCheckingAuth = false;
-      _isLoggedIn = loggedIn;
+      for (final k in _answerStates.keys.toList()) {
+        _answerStates[k] = false;
+      }
+      _currentStep = 0;
     });
-    _loadConfig();
+    await _clearDraft();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.tr('fullResetSuccess')), behavior: SnackBarBehavior.floating));
+    }
+  }
+
+  void _exitToHome() {
+    Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (r) => false);
   }
 
   Future<void> _loadConfig() async {
@@ -46,7 +123,7 @@ class _FullAssessmentPageState extends State<FullAssessmentPage> {
       _error = null;
     });
     try {
-      final config = await AssessmentApiService.fetchFullAssessmentConfig();
+      final config = await LocalAssessmentService.getFullAssessmentConfig();
       if (!mounted) return;
       setState(() {
         _config = config;
@@ -55,6 +132,8 @@ class _FullAssessmentPageState extends State<FullAssessmentPage> {
         }
         _loading = false;
       });
+      _loadDraft();
+      if (mounted) setState(() {});
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -87,126 +166,245 @@ class _FullAssessmentPageState extends State<FullAssessmentPage> {
       (q) => q.tbTypeId == tbTypeId,
       orElse: () => _config!.questions.first,
     );
-    return first.tbTypeName ?? 'Kategori $tbTypeId';
+    final raw = first.tbTypeName ?? context.tr('fullCategoryFallback', {'id': '$tbTypeId'});
+    final locale = AppSettings.instance.locale;
+    return TbContentL10n.tbType(raw, locale);
   }
 
   IconData _iconForTbType(int tbTypeId) {
     final name = _categoryName(tbTypeId).toLowerCase();
-    if (name.contains('paru') ||
-        name.contains('pulmonary') ||
-        name.contains('pernapasan') ||
-        name.contains('respiratory') ||
-        name.contains('lung') ||
-        name.contains('dada') ||
-        name.contains('thorax')) {
-      return Icons.air_outlined;
-    }
-    if (name.contains('kelenjar') ||
-        name.contains('lymph') ||
-        name.contains('getah')) {
-      return Icons.medication_liquid_outlined;
-    }
-    if (name.contains('tulang') ||
-        name.contains('bone') ||
-        name.contains('skeletal') ||
-        name.contains('sendi') ||
-        name.contains('joint')) {
-      return Icons.accessibility_new_rounded;
-    }
-    if (name.contains('otak') ||
-        name.contains('brain') ||
-        name.contains('saraf') ||
-        name.contains('nerve') ||
-        name.contains('neuro')) {
-      return Icons.psychology_outlined;
-    }
-    if (name.contains('usus') ||
-        name.contains('intestine') ||
-        name.contains('perut') ||
-        name.contains('abdomen') ||
-        name.contains('pencernaan') ||
-        name.contains('gastro')) {
-      return Icons.restaurant_outlined;
-    }
-    if (name.contains('hati') ||
-        name.contains('liver') ||
-        name.contains('hepar')) {
-      return Icons.favorite_border_outlined;
-    }
-    if (name.contains('ginjal') ||
-        name.contains('kidney') ||
-        name.contains('renal') ||
-        name.contains('urinary')) {
-      return Icons.water_drop_outlined;
-    }
-    if (name.contains('kulit') ||
-        name.contains('skin') ||
-        name.contains('dermal')) {
-      return Icons.waves_outlined;
-    }
-    if (name.contains('mata') ||
-        name.contains('eye') ||
-        name.contains('ocular')) {
-      return Icons.visibility_outlined;
-    }
-    if (name.contains('jantung') ||
-        name.contains('heart') ||
-        name.contains('cardiac')) {
-      return Icons.favorite_outlined;
-    }
+    if (name.contains('paru') || name.contains('pulmonary') || name.contains('pernapasan') || name.contains('respiratory') || name.contains('lung') || name.contains('dada') || name.contains('thorax')) return Icons.air_outlined;
+    if (name.contains('kelenjar') || name.contains('lymph') || name.contains('getah')) return Icons.medication_liquid_outlined;
+    if (name.contains('tulang') || name.contains('bone') || name.contains('skeletal') || name.contains('sendi') || name.contains('joint')) return Icons.accessibility_new_rounded;
+    if (name.contains('otak') || name.contains('brain') || name.contains('saraf') || name.contains('nerve') || name.contains('neuro')) return Icons.psychology_outlined;
+    if (name.contains('usus') || name.contains('intestine') || name.contains('perut') || name.contains('abdomen') || name.contains('pencernaan') || name.contains('gastro')) return Icons.restaurant_outlined;
+    if (name.contains('hati') || name.contains('liver') || name.contains('hepar')) return Icons.favorite_border_outlined;
+    if (name.contains('ginjal') || name.contains('kidney') || name.contains('renal') || name.contains('urinary')) return Icons.water_drop_outlined;
+    if (name.contains('kulit') || name.contains('skin') || name.contains('dermal')) return Icons.waves_outlined;
+    if (name.contains('mata') || name.contains('eye') || name.contains('ocular')) return Icons.visibility_outlined;
+    if (name.contains('jantung') || name.contains('heart') || name.contains('cardiac')) return Icons.favorite_outlined;
     return Icons.coronavirus_outlined;
   }
 
   int get _totalAnsweredAll => _answerStates.values.where((v) => v).length;
   int get _totalQuestionsAll => _config?.questions.length ?? 0;
 
+  /// Returns indexes of pages where **no** question is answered Ya (all OFF / Tidak).
+  /// Ini dipakai sebagai peringatan saat kirim: hanya halaman yang kosong total yang ditandai,
+  /// bukan tiap soal yang belum dijawab satu per satu — karena desain toggle Ya/Tidak default Tidak.
+  List<int> _getEmptyPageIndexes() {
+    if (_config == null) return [];
+    final empty = <int>[];
+    for (int i = 0; i < _tbTypeIds.length; i++) {
+      final tbId = _tbTypeIds[i];
+      final qs = _questionsByTbType[tbId] ?? [];
+      final answeredCount = qs.where((q) => _answerStates[q.questionId] == true).length;
+      if (answeredCount == 0) empty.add(i);
+    }
+    return empty;
+  }
+
   void _goToNextStep() {
     if (_isLastStep) {
       _onSubmit();
     } else {
       setState(() => _currentStep++);
+      _persistDraft();
     }
   }
 
   void _goToPrevStep() {
-    if (!_isFirstStep) setState(() => _currentStep--);
+    if (!_isFirstStep) {
+      setState(() => _currentStep--);
+      _persistDraft();
+    }
+  }
+
+  void _onAnswerToggle(int qid, bool value) {
+    setState(() => _answerStates[qid] = value);
+    _persistDraft();
   }
 
   Future<void> _onSubmit() async {
-    if (_totalAnsweredAll == 0 || _config == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Silakan pilih minimal satu gejala.'),
-          backgroundColor: AppColors.destructive,
-        ),
-      );
+    if (_config == null) return;
+
+    // Hanya hal. yang kosong total (tidak ada satu pun Ya) yang memicu peringatan.
+    // Toggle default Tidak (OFF) tidak dihitung sebagai "belum dijawab" per soal.
+    final emptyIndexes = _getEmptyPageIndexes();
+    if (emptyIndexes.isNotEmpty) {
+      final shouldProceed = await _showEmptyPagesDialog(emptyIndexes);
+      if (shouldProceed != true) {
+        // tombol kiri → redirect ke halaman kosong pertama
+        setState(() => _currentStep = emptyIndexes.first);
+        _persistDraft();
+        return;
+      }
+      // tombol kanan → tetap lanjut kirim meski ada halaman kosong
+      await _performSubmit();
       return;
     }
+
+    await _performSubmit();
+  }
+
+  /// Popup merah di tengah: halaman TBC yang kosong total (tidak ada Ya) — hanya per halaman, bukan per soal
+  Future<bool?> _showEmptyPagesDialog(List<int> emptyIndexes) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
+    final destructive = isDark ? AppColors.darkDestructive : AppColors.destructive;
+
+    final emptyNames = emptyIndexes.map((idx) => _categoryName(_tbTypeIds[idx])).toList();
+
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
+      builder: (ctx) {
+        return Center(
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              width: 320,
+              constraints: const BoxConstraints(maxWidth: 340),
+              margin: const EdgeInsets.symmetric(horizontal: 20),
+              decoration: BoxDecoration(
+                color: card,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: destructive.withValues(alpha: 0.35), width: 1.6),
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.22), blurRadius: 28, offset: const Offset(0, 14))],
+              ),
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: destructive.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: destructive.withValues(alpha: 0.25), width: 1.2),
+                    ),
+                    child: Icon(Icons.error_outline_rounded, color: destructive, size: 30),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    context.tr('fullEmptyDialogTitle'),
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: destructive, letterSpacing: -0.3),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    context.tr('fullEmptyDialogDesc'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg, height: 1.45),
+                  ),
+                  const SizedBox(height: 14),
+                  // Daftar halaman kosong — dengan border merah seperti coretan di screenshot
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: destructive.withValues(alpha: 0.07),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: destructive.withValues(alpha: 0.55), width: 1.4),
+                    ),
+                    child: Column(
+                      children: emptyNames.map((name) {
+                        final idx = emptyNames.indexOf(name);
+                        final pageNum = emptyIndexes[idx] + 1;
+                        return Padding(
+                          padding: EdgeInsets.only(bottom: idx < emptyNames.length - 1 ? 8 : 0),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(color: destructive.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8), border: Border.all(color: destructive.withValues(alpha: 0.25))),
+                                child: Icon(Icons.description_outlined, size: 14, color: destructive),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      context.tr('fullPageLabel', {'num': '$pageNum'}),
+                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: destructive, letterSpacing: 0.6),
+                                    ),
+                                    Text(name, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: fg, height: 1.2)),
+                                  ],
+                                ),
+                              ),
+                              Icon(Icons.circle_outlined, size: 14, color: destructive.withValues(alpha: 0.5)),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    context.tr('fullEmptyDialogQuestion'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 11, color: mutedFg, height: 1.4),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          icon: Icon(Icons.arrow_back_rounded, size: 16, color: destructive),
+                          label: Text(context.tr('fullEmptyGoToForm'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: destructive)),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: destructive,
+                            side: BorderSide(color: destructive.withValues(alpha: 0.55), width: 1.5),
+                            backgroundColor: card,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          icon: const Icon(Icons.send_rounded, size: 16, color: Colors.white),
+                          label: Text(context.tr('fullEmptySendAnyway'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: destructive,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            elevation: 2,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  // hint kecil: tombol kiri redirect ke halaman kosong pertama
+                  Text(
+                    context.tr('fullEmptyHintRedirect'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 9.5, color: mutedFg.withValues(alpha: 0.7), fontStyle: FontStyle.italic),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _performSubmit() async {
     if (_submitting) return;
     setState(() => _submitting = true);
     try {
-      // Only logged-in users need the network — they must persist the result
-      // to the backend. Guests submit fully locally; the fallback config now
-      // carries real Indonesian copy so an offline guest still gets a proper
-      // result page.
-      if (_isLoggedIn) {
-        final online = await ConnectivityService.isOnline();
-        if (!online) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Anda sedang offline. Periksa koneksi internet Anda lalu coba lagi.',
-                ),
-                backgroundColor: AppColors.destructive,
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
-          return;
-        }
-      }
-      // Compute per-TB-type sums using applicableTbTypes for cross-type contribution
       final Map<int, double> sumByTbType = {};
       final Map<int, String> tbTypeNames = {};
       final Map<int, List<Map<String, dynamic>>> symptomsByTbType = {};
@@ -214,28 +412,16 @@ class _FullAssessmentPageState extends State<FullAssessmentPage> {
       for (final q in _config!.questions) {
         final isSelected = _answerStates[q.questionId] ?? false;
         final cfValue = isSelected ? 1.0 : 0.0;
-
-        // Collect TB type names from applicableTbTypes and primary
         for (final tw in q.applicableTbTypes) {
           tbTypeNames[tw.tbTypeId] = tw.tbTypeName;
         }
         tbTypeNames[q.tbTypeId] = q.tbTypeName ?? 'Kategori ${q.tbTypeId}';
-
         if (!isSelected) continue;
-
         final targets = q.applicableTbTypes.isNotEmpty
             ? q.applicableTbTypes
-            : [
-                TbTypeWeight(
-                  tbTypeId: q.tbTypeId,
-                  tbTypeName: q.tbTypeName ?? '',
-                  weight: q.weight,
-                ),
-              ];
-
+            : [TbTypeWeight(tbTypeId: q.tbTypeId, tbTypeName: q.tbTypeName ?? '', weight: q.weight)];
         for (final tw in targets) {
-          sumByTbType[tw.tbTypeId] =
-              (sumByTbType[tw.tbTypeId] ?? 0) + tw.weight;
+          sumByTbType[tw.tbTypeId] = (sumByTbType[tw.tbTypeId] ?? 0) + tw.weight;
           symptomsByTbType.putIfAbsent(tw.tbTypeId, () => []).add({
             'symptomName': q.symptomName,
             'symptomCode': q.symptomCode,
@@ -258,129 +444,19 @@ class _FullAssessmentPageState extends State<FullAssessmentPage> {
           'tbTypeName': tbTypeNames[tbTypeId] ?? 'Kategori $tbTypeId',
           'tbTypeCode': 'TB$tbTypeId',
           'totalScore': percentage,
-          'riskLevel': matchedLevel != null
-              ? {
-                  'title': matchedLevel.title,
-                  'code': matchedLevel.code,
-                  'description': matchedLevel.description ?? '',
-                  'recommendation': matchedLevel.recommendation ?? '',
-                }
-              : {
-                  'title': 'Risiko Rendah',
-                  'code': 'LOW',
-                  'description': '',
-                  'recommendation': '',
-                },
+          'riskLevel': matchedLevel != null ? {'title': matchedLevel.title, 'code': matchedLevel.code, 'description': matchedLevel.description ?? '', 'recommendation': matchedLevel.recommendation ?? ''} : {'title': context.tr('homeRiskLowTitle'), 'code': 'LOW', 'description': '', 'recommendation': ''},
           'symptomDetails': symptomsByTbType[tbTypeId] ?? [],
         });
       }
       final result = {'results': results};
+      final answers = _config!.questions.map((q) => {'questionId': q.questionId, 'cfValue': (_answerStates[q.questionId] ?? false) ? 1.0 : 0.0}).toList();
+      await LocalAssessmentService.submitAssessment(assessmentTypeId: 2, answers: answers);
+      await _clearDraft();
       if (!mounted) return;
-      if (!_isLoggedIn) {
-        Map<String, dynamic>? highestRiskResult;
-        double highestScore = -1;
-        for (final r in results) {
-          final score = (r['totalScore'] as num).toDouble();
-          if (score > highestScore) {
-            highestScore = score;
-            highestRiskResult = r;
-          }
-        }
-        if (highestRiskResult != null) {
-          final riskLevel =
-              highestRiskResult['riskLevel'] as Map<String, dynamic>?;
-          final symptoms = <String, bool>{};
-          _answerStates.forEach((k, v) => symptoms[k.toString()] = v);
-          StorageService.guestSessionResult = {
-            'riskLevel': riskLevel?['code'] ?? 'LOW',
-            'percentage': highestRiskResult['totalScore']?.toInt() ?? 0,
-            'riskCode': riskLevel?['code'] ?? 'LOW',
-            'riskTitle': riskLevel?['title'] ?? 'Risiko Rendah',
-            'description': riskLevel?['description'] ?? '',
-            'type': 'FULL ASSESSMENT',
-            'symptoms': symptoms,
-            'fullResults': results,
-          };
-        }
-      }
-      final answers = _config!.questions
-          .map(
-            (q) => {
-              'questionId': q.questionId,
-              'cfValue': (_answerStates[q.questionId] ?? false) ? 1.0 : 0.0,
-            },
-          )
-          .toList();
-
-      // Gate 2: logged-in users must persist to backend *before* the result
-      // page is shown. Otherwise the user sees a result that's not retrievable
-      // from history later.
-      if (_isLoggedIn) {
-        try {
-          await AssessmentApiService.submitAssessment(
-            assessmentTypeId: 2,
-            answers: answers,
-          );
-        } catch (e) {
-          if (mounted) {
-            final msg = NetworkException.from(e).userMessage;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(msg),
-                backgroundColor: AppColors.destructive,
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
-          return;
-        }
-        // Mitigation: seed the recent-assessment cache from the submit
-        // payload itself, picking the highest-risk per-type result. This way
-        // the home card on next open has data even if backend fetch fails.
-        Map<String, dynamic>? highest;
-        double highestScore = -1;
-        for (final r in results) {
-          final score = (r['totalScore'] as num).toDouble();
-          if (score > highestScore) {
-            highestScore = score;
-            highest = r;
-          }
-        }
-        final user = await StorageService.getUser();
-        if (highest != null && user?.id != null && user!.id.isNotEmpty) {
-          final riskLevel = highest['riskLevel'] as Map<String, dynamic>?;
-          await StorageService.saveCachedRecentAssessment(user.id, {
-            'createdAt': DateTime.now().toIso8601String(),
-            'assessmentTypeId': 2,
-            'assessmentTypeName': 'Full Assessment',
-            'riskLevelCode': riskLevel?['code'] ?? 'LOW',
-            'riskLevelTitle': riskLevel?['title'] ?? 'Risiko Rendah',
-            'totalScore': (highest['totalScore'] as num).toInt(),
-            'primaryTbTypeName': highest['tbTypeName'] ?? '',
-          });
-        }
-      }
-
-      if (!mounted) return;
-      Navigator.pushNamed(
-        context,
-        AppRoutes.result,
-        arguments: {
-          'isFullAssessment': true,
-          'isGuest': !_isLoggedIn,
-          'result': result,
-        },
-      );
+      Navigator.pushNamed(context, AppRoutes.result, arguments: {'isFullAssessment': true, 'result': result});
     } catch (e) {
       if (mounted) {
-        final msg = NetworkException.from(e).userMessage;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(msg),
-            backgroundColor: AppColors.destructive,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: AppColors.isDark(context) ? AppColors.darkDestructive : AppColors.destructive, behavior: SnackBarBehavior.floating));
       }
     } finally {
       if (mounted) setState(() => _submitting = false);
@@ -389,151 +465,58 @@ class _FullAssessmentPageState extends State<FullAssessmentPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? AppColors.darkBackground : AppColors.background;
     final sw = MediaQuery.of(context).size.width;
     final sh = MediaQuery.of(context).size.height;
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: bg,
       body: Stack(
         children: [
-          _buildScatteredAuras(sw, sh),
+          _buildScatteredAuras(sw, sh, isDark),
           SafeArea(
             child: Column(
               children: [
-                _buildHeader(context),
-                if (!_loading && _error == null) _buildProgressBar(),
-                if (!_loading && _error == null) _buildCurrentTbTypeLabel(),
+                ResponsiveCenter(maxWidth: 720, child: _buildHeader(context, isDark)),
+                if (!_loading && _error == null) ResponsiveCenter(maxWidth: 720, child: _buildProgressBar(isDark)),
+                if (!_loading && _error == null) ResponsiveCenter(maxWidth: 720, child: _buildCurrentTbTypeLabel(isDark)),
                 Expanded(
-                  child: _isCheckingAuth
-                      ? const Center(child: CircularProgressIndicator())
-                      : _loading
+                  child: _loading
                       ? const Center(child: CircularProgressIndicator())
                       : _error != null
-                      ? _buildErrorContent()
-                      : _buildStepContent(),
+                          ? ResponsiveCenter(maxWidth: 720, child: _buildErrorContent(isDark))
+                          : ResponsiveCenter(maxWidth: 720, child: _buildStepContent(isDark)),
                 ),
-                if (!_loading && _error == null) _buildWizardBottomBar(),
+                if (!_loading && _error == null) _buildWizardBottomBar(isDark),
               ],
             ),
           ),
-          if (_submitting)
-            Container(
-              color: Colors.black.withValues(alpha: 0.3),
-              child: const Center(child: CircularProgressIndicator()),
-            ),
+          if (_submitting) Container(color: Colors.black.withValues(alpha: 0.3), child: const Center(child: CircularProgressIndicator())),
         ],
       ),
     );
   }
 
-  Widget _buildErrorContent() => Center(
-    child: Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(
-            Icons.error_outline_rounded,
-            size: 64,
-            color: AppColors.destructive,
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Gagal Memuat Data',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: AppColors.foreground,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _error ?? 'Terjadi kesalahan tidak diketahui',
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: AppColors.mutedForeground),
-          ),
-          const SizedBox(height: 24),
-          ElevatedButton(
-            onPressed: _loadConfig,
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-            child: const Text(
-              'Coba Lagi',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _buildProgressBar() => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-    child: Row(
-      children: List.generate(_totalSteps, (i) {
-        final isCompleted = i <= _currentStep;
-        return Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(
-              left: i > 0 ? 4 : 0,
-              right: i < _totalSteps - 1 ? 4 : 0,
-            ),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              height: 4,
-              decoration: BoxDecoration(
-                color: isCompleted
-                    ? AppColors.primary
-                    : AppColors.muted.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-        );
-      }),
-    ),
-  );
-
-  Widget _buildCurrentTbTypeLabel() {
-    final tbTypeId = _currentTbTypeId();
-    final name = _categoryName(tbTypeId);
-    final icon = _iconForTbType(tbTypeId);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: AppColors.primary.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
+  Widget _buildErrorContent(bool isDark) {
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 16, color: AppColors.primary),
-            const SizedBox(width: 8),
-            Text(
-              '${_currentStep + 1}/$_totalSteps',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: AppColors.primary.withValues(alpha: 0.6),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              width: 1,
-              height: 14,
-              color: AppColors.primary.withValues(alpha: 0.2),
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                name,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.primary,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
+            Icon(Icons.error_outline_rounded, size: 52, color: isDark ? AppColors.darkDestructive : AppColors.destructive),
+            const SizedBox(height: 12),
+            Text(context.tr('failedToLoad'), style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: fg)),
+            const SizedBox(height: 6),
+            Text(_error ?? context.tr('unknownError'), textAlign: TextAlign.center, style: TextStyle(color: mutedFg, fontSize: 12)),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _loadConfig,
+              style: ElevatedButton.styleFrom(backgroundColor: isDark ? AppColors.darkPrimary : AppColors.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10)),
+              child: Text(context.tr('tryAgain'), style: TextStyle(color: isDark ? AppColors.darkPrimaryForeground : Colors.white, fontSize: 13)),
             ),
           ],
         ),
@@ -541,307 +524,270 @@ class _FullAssessmentPageState extends State<FullAssessmentPage> {
     );
   }
 
-  Widget _buildStepContent() {
+  Widget _buildProgressBar(bool isDark) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Row(
+          children: List.generate(_totalSteps, (i) {
+            final isCompleted = i <= _currentStep;
+            final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+            final muted = isDark ? AppColors.darkMuted : AppColors.muted;
+            return Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(left: i > 0 ? 4 : 0, right: i < _totalSteps - 1 ? 4 : 0),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  height: 3,
+                  decoration: BoxDecoration(color: isCompleted ? primary : muted.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+            );
+          }),
+        ),
+      );
+
+  Widget _buildCurrentTbTypeLabel(bool isDark) {
+    final tbTypeId = _currentTbTypeId();
+    final name = _categoryName(tbTypeId);
+    final icon = _iconForTbType(tbTypeId);
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(color: primary.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: primary),
+            const SizedBox(width: 6),
+            Text('${_currentStep + 1}/$_totalSteps', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: primary.withValues(alpha: 0.6))),
+            const SizedBox(width: 6),
+            Container(width: 1, height: 12, color: primary.withValues(alpha: 0.2)),
+            const SizedBox(width: 6),
+            Flexible(child: Text(name, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: primary), overflow: TextOverflow.ellipsis)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStepContent(bool isDark) {
     final tbTypeId = _currentTbTypeId();
     final questions = _currentQuestions();
     final title = _categoryName(tbTypeId);
     final icon = _iconForTbType(tbTypeId);
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-      child: Column(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Column(children: [const SizedBox(height: 8), _buildWizardSectionCard(tbTypeId, questions, icon, title, isDark)]),
+    );
+  }
+
+  Widget _buildWizardSectionCard(int tbTypeId, List<QuickCheckQuestion> questions, IconData icon, String title, bool isDark) {
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    final locale = AppSettings.instance.locale;
+    return Container(
+      decoration: BoxDecoration(
+        color: card.withValues(alpha: isDark ? 1.0 : 0.85),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: isDark ? AppColors.darkBorder : Colors.white),
+        boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.06), blurRadius: 16, offset: const Offset(0, 4))],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        child: Column(
+          children: questions.map((q) {
+            final isSelected = _answerStates[q.questionId] ?? false;
+            final sIcon = getSymptomIcon(q.symptomCode);
+            final label = q.localizedQuestionText(locale);
+            return _buildToggleItem(q.questionId, sIcon, label, isSelected, isDark);
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(BuildContext context, bool isDark) {
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
         children: [
-          const SizedBox(height: 12),
-          _buildWizardSectionCard(tbTypeId, questions, icon, title),
+          // Back + Home combined — back arrow with home indicator
+          Tooltip(
+            message: context.tr('fullExitHomeTooltip'),
+            child: GestureDetector(
+              onTap: _exitToHome,
+              child: Container(
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                decoration: BoxDecoration(
+                  color: card.withValues(alpha: 0.95),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: isDark ? AppColors.darkBorder : Colors.white),
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.arrow_back, color: fg, size: 18),
+                    Container(width: 1, height: 18, margin: const EdgeInsets.symmetric(horizontal: 6), color: (isDark ? AppColors.darkBorder : AppColors.muted).withValues(alpha: 0.35)),
+                    Icon(Icons.home_outlined, color: primary, size: 18),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              children: [
+                Text(context.tr('fullTitle'), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: fg, letterSpacing: -0.3)),
+                const SizedBox(height: 3),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(color: primary.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(100)),
+                  child: Text(context.tr('fullAnswered', {'answered': '$_totalAnsweredAll', 'total': '$_totalQuestionsAll'}), style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: primary, letterSpacing: 1.0)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Reset button top-right
+          Tooltip(
+            message: context.tr('fullResetTooltip'),
+            child: GestureDetector(
+              onTap: _resetForm,
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: card.withValues(alpha: 0.95),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: isDark ? AppColors.darkBorder : Colors.white),
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
+                ),
+                child: Icon(Icons.restart_alt_rounded, color: fg, size: 18),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildWizardSectionCard(
-    int tbTypeId,
-    List<QuickCheckQuestion> questions,
-    IconData icon,
-    String title,
-  ) => Container(
-    decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.85),
-      borderRadius: BorderRadius.circular(24),
-      border: Border.all(color: Colors.white),
-      boxShadow: [
-        BoxShadow(
-          color: AppColors.primary.withValues(alpha: 0.06),
-          blurRadius: 20,
-          offset: const Offset(0, 4),
-        ),
-      ],
-    ),
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      child: Column(
-        children: questions.map((q) {
-          final isSelected = _answerStates[q.questionId] ?? false;
-          final sIcon = getSymptomIcon(q.symptomCode);
-          return _buildToggleItem(
-            q.questionId,
-            sIcon,
-            q.questionText,
-            isSelected,
-          );
-        }).toList(),
-      ),
-    ),
-  );
-
-  Widget _buildHeader(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-    child: Row(
-      children: [
-        GestureDetector(
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.7),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: const Icon(
-              Icons.arrow_back,
-              color: AppColors.foreground,
-              size: 20,
-            ),
-          ),
-        ),
-        Expanded(
-          child: Column(
-            children: [
-              const Text(
-                'Pemeriksaan Kesehatan Lengkap',
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.foreground,
-                  letterSpacing: -0.3,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 3,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(100),
-                ),
-                child: Text(
-                  '$_totalAnsweredAll/$_totalQuestionsAll TERJAWAB',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.primary,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 40),
-      ],
-    ),
-  );
-
-  Widget _buildWizardBottomBar() => Container(
-    padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-    decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.9),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.05),
-          blurRadius: 20,
-          offset: const Offset(0, -4),
-        ),
-      ],
-    ),
-    child: SafeArea(
-      top: false,
-      child: Row(
-        children: [
-          Expanded(
-            child: SizedBox(
-              height: 52,
-              child: OutlinedButton.icon(
-                onPressed: _isFirstStep ? null : _goToPrevStep,
-                icon: const Icon(Icons.arrow_back_rounded, size: 18),
-                label: const Text('Kembali'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.mutedForeground,
-                  side: BorderSide(
-                    color: _isFirstStep
-                        ? AppColors.muted.withValues(alpha: 0.3)
-                        : AppColors.primary.withValues(alpha: 0.3),
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: SizedBox(
-              height: 52,
-              child: ElevatedButton.icon(
-                onPressed: _goToNextStep,
-                icon: Icon(
-                  _isLastStep
-                      ? Icons.check_rounded
-                      : Icons.arrow_forward_rounded,
-                  size: 18,
-                  color: Colors.white,
-                ),
-                label: Text(
-                  _isLastStep ? 'Kirim' : 'Lanjut',
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  elevation: 4,
-                  shadowColor: AppColors.primary.withValues(alpha: 0.3),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _buildToggleItem(
-    int questionId,
-    IconData icon,
-    String label,
-    bool isSelected,
-  ) => GestureDetector(
-    onTap: () => setState(() {
-      _answerStates[questionId] = !isSelected;
-    }),
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: const EdgeInsets.all(12),
+  Widget _buildWizardBottomBar(bool isDark) {
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    final muted = isDark ? AppColors.darkMuted : AppColors.muted;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
       decoration: BoxDecoration(
-        color: isSelected
-            ? AppColors.primary.withValues(alpha: 0.1)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isSelected
-              ? AppColors.primary.withValues(alpha: 0.3)
-              : Colors.transparent,
-        ),
-        boxShadow: isSelected
-            ? [
-                BoxShadow(
-                  color: AppColors.primary.withValues(alpha: 0.08),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ]
-            : null,
+        color: card.withValues(alpha: 0.96),
+        border: Border(top: BorderSide(color: primary.withValues(alpha: 0.08))),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 16, offset: const Offset(0, -4))],
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? AppColors.primary.withValues(alpha: 0.2)
-                  : AppColors.muted.withValues(alpha: 0.4),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              icon,
-              color: isSelected ? AppColors.primary : AppColors.mutedForeground,
-              size: 18,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 13.5,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                color: isSelected ? AppColors.primary : AppColors.foreground,
-                height: 1.4,
+      child: SafeArea(
+        top: false,
+        child: ResponsiveCenter(
+          maxWidth: 720,
+          child: Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 48,
+                  child: OutlinedButton.icon(
+                    onPressed: _isFirstStep ? null : _goToPrevStep,
+                    icon: const Icon(Icons.arrow_back_rounded, size: 16),
+                    label: Text(context.tr('back'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: primary,
+                      backgroundColor: card,
+                      side: BorderSide(color: _isFirstStep ? muted.withValues(alpha: 0.35) : primary.withValues(alpha: 0.5), width: 1.4),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                ),
+              ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Container(
+                height: 48,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withValues(alpha: isDark ? 0.15 : 0.9), width: 1.2),
+                  boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.28), blurRadius: 14, offset: const Offset(0, 5)), BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
+                ),
+                child: SizedBox(
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: _goToNextStep,
+                    icon: Icon(_isLastStep ? Icons.check_rounded : Icons.arrow_forward_rounded, size: 16, color: isDark ? AppColors.darkPrimaryForeground : Colors.white),
+                    label: Text(_isLastStep ? context.tr('send') : context.tr('next'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: isDark ? AppColors.darkPrimaryForeground : Colors.white)),
+                    style: ElevatedButton.styleFrom(backgroundColor: primary, foregroundColor: isDark ? AppColors.darkPrimaryForeground : Colors.white, elevation: 0, shadowColor: Colors.transparent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+                  ),
+                ),
               ),
             ),
-          ),
-          Switch(
-            value: isSelected,
-            onChanged: (val) => setState(() {
-              _answerStates[questionId] = val;
-            }),
-            activeThumbColor: AppColors.primary,
-            activeTrackColor: AppColors.primary.withValues(alpha: 0.3),
-            inactiveThumbColor: Colors.white,
-            inactiveTrackColor: AppColors.muted,
-          ),
+          ],
+        ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToggleItem(int questionId, IconData icon, String label, bool isSelected, bool isDark) {
+    final primary = isDark ? AppColors.darkPrimary : AppColors.primary;
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final muted = isDark ? AppColors.darkMuted : AppColors.muted;
+    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
+    return GestureDetector(
+      onTap: () => _onAnswerToggle(questionId, !isSelected),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        margin: const EdgeInsets.symmetric(vertical: 3),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: isSelected ? primary.withValues(alpha: 0.1) : Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: isSelected ? primary.withValues(alpha: 0.3) : Colors.transparent),
+          boxShadow: isSelected ? [BoxShadow(color: primary.withValues(alpha: 0.08), blurRadius: 8, offset: const Offset(0, 2))] : null,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(color: isSelected ? primary.withValues(alpha: 0.2) : muted.withValues(alpha: 0.35), borderRadius: BorderRadius.circular(9)),
+              child: Icon(icon, color: isSelected ? primary : mutedFg, size: 16),
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(label, style: TextStyle(fontSize: 12.5, fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500, color: isSelected ? primary : fg, height: 1.35))),
+            Switch(
+              value: isSelected,
+              onChanged: (val) => _onAnswerToggle(questionId, val),
+              activeThumbColor: primary,
+              activeTrackColor: primary.withValues(alpha: 0.3),
+              inactiveThumbColor: Colors.white,
+              inactiveTrackColor: muted,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScatteredAuras(double sw, double sh, bool isDark) => Stack(
+        children: [
+          Positioned(top: -sw * 0.05, right: -sw * 0.1, child: _buildAura(150, (isDark ? AppColors.darkPrimary : AppColors.primary).withValues(alpha: 0.08))),
+          Positioned(top: sh * 0.3, left: -sw * 0.2, child: _buildAura(130, (isDark ? AppColors.darkSecondary : AppColors.secondary).withValues(alpha: 0.04))),
+          Positioned(bottom: sh * 0.2, right: sw * 0.1, child: _buildAura(110, (isDark ? AppColors.darkMuted : AppColors.muted).withValues(alpha: isDark ? 0.08 : 0.15))),
         ],
-      ),
-    ),
-  );
+      );
 
-  Widget _buildScatteredAuras(double sw, double sh) => Stack(
-    children: [
-      Positioned(
-        top: -sw * 0.05,
-        right: -sw * 0.1,
-        child: _buildAura(175, AppColors.primary.withValues(alpha: 0.08)),
-      ),
-      Positioned(
-        top: sh * 0.3,
-        left: -sw * 0.2,
-        child: _buildAura(150, AppColors.secondary.withValues(alpha: 0.04)),
-      ),
-      Positioned(
-        bottom: sh * 0.2,
-        right: sw * 0.1,
-        child: _buildAura(125, AppColors.muted.withValues(alpha: 0.15)),
-      ),
-    ],
-  );
-
-  Widget _buildAura(double size, Color color) => Container(
-    width: size * 2,
-    height: size * 2,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      boxShadow: [
-        BoxShadow(color: color, blurRadius: size, spreadRadius: size / 2),
-      ],
-    ),
-  );
+  Widget _buildAura(double size, Color color) => Container(width: size * 2, height: size * 2, decoration: BoxDecoration(shape: BoxShape.circle, boxShadow: [BoxShadow(color: color, blurRadius: size, spreadRadius: size / 2)]));
 }
 
 IconData getSymptomIcon(String code) {
