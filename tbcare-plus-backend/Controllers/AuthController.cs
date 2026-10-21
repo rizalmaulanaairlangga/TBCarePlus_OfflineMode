@@ -1,0 +1,667 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using TBCarePlus.API.Data;
+using TBCarePlus.API.DTOs;
+using TBCarePlus.API.Models;
+
+namespace TBCarePlus.API.Controllers;
+
+[ApiController]
+[Route("api/v1/auth")]
+public class AuthController : ControllerBase
+{
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IConfiguration _config;
+    private readonly AppDbContext _db;
+    private readonly ILogger<AuthController> _logger;
+
+    public AuthController(IHttpClientFactory httpClientFactory, IConfiguration config, AppDbContext db, ILogger<AuthController> logger)
+    {
+        _httpClientFactory = httpClientFactory;
+        _config = config;
+        _db = db;
+        _logger = logger;
+    }
+
+    private bool IsPermanentAuthDisabled()
+    {
+        // Keep original register/login code intact but gate it via config.
+        // Set Auth:DisablePermanentAccounts = true to sensor login/regis.
+        var flag = _config["Auth:DisablePermanentAccounts"];
+        if (bool.TryParse(flag, out var disabled) && disabled) return true;
+        // Fallback to env var
+        var env = Environment.GetEnvironmentVariable("DISABLE_PERMANENT_AUTH");
+        if (bool.TryParse(env, out var envDisabled) && envDisabled) return true;
+        return false;
+    }
+
+    private IActionResult PermanentAuthDisabledResponse()
+    {
+        return StatusCode(503, ApiResponse<object>.Fail(
+            "Pendaftaran dan login akun permanen untuk sementara dinonaktifkan. Silakan gunakan Masuk sebagai Tamu — seluruh fitur pemeriksaan tersedia untuk akun tamu. Data tamu akan dihapus otomatis setelah 12 jam untuk menjaga kebersihan basis data."));
+    }
+
+    [HttpPost("guest")]
+    public async Task<IActionResult> CreateGuest()
+    {
+        var supabaseUrl = _config["Supabase:Url"];
+        var supabaseServiceRoleKey = _config["Supabase:ServiceRoleKey"];
+        var jwtSecret = _config["Supabase:JwtSecret"];
+
+        if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseServiceRoleKey) || string.IsNullOrEmpty(jwtSecret))
+            return StatusCode(500, ApiResponse<object>.Fail("Layanan sedang tidak tersedia. Silakan coba lagi dalam beberapa saat. Jika masalah berlanjut, hubungi tim TBCare+."));
+
+        // Create an anonymous Supabase user via Admin API so FK constraints pass.
+        var guestShort = Guid.NewGuid().ToString("N")[..8];
+        var guestEmail = $"guest_{guestShort}_{Guid.NewGuid():N}".Substring(0, 32) + "@tbcare-guest.local";
+        // Ensure unique
+        guestEmail = $"guest_{Guid.NewGuid():N}@tbcare-guest.local";
+        var guestPassword = $"GuestPass!{Guid.NewGuid():N}";
+
+        Guid guestUserId;
+
+        using (var http = _httpClientFactory.CreateClient())
+        {
+            var payload = new
+            {
+                email = guestEmail,
+                password = guestPassword,
+                email_confirm = true,
+                user_metadata = new { display_name = "Tamu", is_guest = true }
+            };
+            var body = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{supabaseUrl}/auth/v1/admin/users") { Content = body };
+            req.Headers.Add("apikey", supabaseServiceRoleKey);
+            req.Headers.Add("Authorization", $"Bearer {supabaseServiceRoleKey}");
+
+            HttpResponseMessage resp;
+            string respBody;
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+                resp = await http.SendAsync(req, cts.Token);
+                respBody = await resp.Content.ReadAsStringAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Guest creation timed out (Supabase Admin API)");
+                return StatusCode(500, ApiResponse<object>.Fail("Gagal membuat sesi tamu. Layanan sedang sibuk. Silakan coba lagi dalam beberapa saat. Jika masalah berlanjut, hubungi tim TBCare+."));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Guest creation http error");
+                return StatusCode(500, ApiResponse<object>.Fail("Gagal membuat sesi tamu. Layanan sedang tidak tersedia. Silakan coba lagi dalam beberapa saat. Jika masalah berlanjut, hubungi tim TBCare+."));
+            }
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.LogError("Guest creation failed: {Status} {Body}", resp.StatusCode, respBody);
+                return StatusCode(500, ApiResponse<object>.Fail("Gagal membuat sesi tamu. Layanan sedang tidak tersedia. Silakan coba lagi dalam beberapa saat. Jika masalah berlanjut, hubungi tim TBCare+."));
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(respBody);
+                guestUserId = Guid.Parse(doc.RootElement.GetProperty("id").GetString()!);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to parse guest user id");
+                return StatusCode(500, ApiResponse<object>.Fail("Gagal membuat sesi tamu. Layanan sedang tidak tersedia. Silakan coba lagi dalam beberapa saat."));
+            }
+        }
+
+        // Ensure profile exists — idempoten via ON CONFLICT, hindari 23505 duplicate key
+        try
+        {
+            await _db.Database.ExecuteSqlRawAsync(
+                "INSERT INTO tbcare_plus.profiles (id, nickname, created_at, updated_at) VALUES ({0}, 'Tamu', now(), now()) ON CONFLICT (id) DO NOTHING",
+                guestUserId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to create guest profile for {UserId}, continuing anyway", guestUserId);
+            // Bersihkan tracker agar konteks tidak tertinggal dalam state gagal
+            try { _db.ChangeTracker.Clear(); } catch { }
+        }
+
+        // Generate guest JWT valid for 12 hours
+        var (accessToken, expiresIn) = GenerateGuestJwt(guestUserId, guestEmail, jwtSecret);
+
+        var userDto = new UserDto
+        {
+            Id = guestUserId.ToString(),
+            Email = guestEmail,
+            FullName = "Tamu",
+            Role = "authenticated",
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        var authResponse = new AuthResponseDto
+        {
+            AccessToken = accessToken,
+            RefreshToken = accessToken, // guests use same token; refresh via re-login as guest
+            ExpiresIn = expiresIn,
+            User = userDto
+        };
+
+        return Ok(ApiResponse<AuthResponseDto>.Ok(authResponse, "Sesi tamu berhasil dibuat. Sesi berlaku 12 jam — data akan dihapus otomatis setelah periode tersebut untuk menjaga kebersihan basis data."));
+    }
+
+    private static (string token, int expiresIn) GenerateGuestJwt(Guid userId, string email, string jwtSecret)
+    {
+        byte[] keyBytes;
+        try
+        {
+            keyBytes = Convert.FromBase64String(jwtSecret);
+            if (keyBytes.Length < 16) keyBytes = Encoding.UTF8.GetBytes(jwtSecret);
+        }
+        catch
+        {
+            keyBytes = Encoding.UTF8.GetBytes(jwtSecret);
+        }
+
+        var securityKey = new SymmetricSecurityKey(keyBytes);
+        var creds = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+
+        var now = DateTime.UtcNow;
+        var expires = now.AddHours(12);
+        var expiresIn = (int)(expires - now).TotalSeconds;
+
+        var claims = new List<Claim>
+        {
+            new Claim("sub", userId.ToString()),
+            new Claim("email", email),
+            new Claim("role", "authenticated"),
+            new Claim("aud", "authenticated"),
+            new Claim(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+        };
+
+        var token = new JwtSecurityToken(
+            issuer: "supabase",
+            audience: "authenticated",
+            claims: claims,
+            notBefore: now,
+            expires: expires,
+            signingCredentials: creds
+        );
+
+        var handler = new JwtSecurityTokenHandler();
+        return (handler.WriteToken(token), expiresIn);
+    }
+
+    [HttpPost("register")]
+    public async Task<IActionResult> Register([FromBody] AuthRegisterRequest request)
+    {
+        if (IsPermanentAuthDisabled()) return PermanentAuthDisabledResponse();
+        var supabaseUrl = _config["Supabase:Url"];
+        var supabaseKey = _config["Supabase:Key"];
+
+        if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseKey))
+            return StatusCode(500, ApiResponse<object>.Fail("Supabase configuration is missing."));
+
+        using var http = _httpClientFactory.CreateClient();
+
+        var signupPayload = new
+        {
+            email = request.Email,
+            password = request.Password,
+            options = new
+            {
+                data = new
+                {
+                    display_name = request.Nickname ?? "",
+                    email_confirm = true
+                }
+            }
+        };
+
+        var requestBody = new StringContent(
+            JsonSerializer.Serialize(signupPayload), Encoding.UTF8, "application/json");
+
+        var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{supabaseUrl}/auth/v1/signup")
+        {
+            Content = requestBody
+        };
+        httpRequest.Headers.Add("apikey", supabaseKey);
+
+        var response = await http.SendAsync(httpRequest);
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var msg = ParseSupabaseError(responseBody, "Registration failed.");
+            return BadRequest(ApiResponse<object>.Fail(msg));
+        }
+
+        var authResponse = BuildAuthResponse(responseBody);
+
+        var profile = new Profile
+        {
+            Id = Guid.Parse(authResponse.User.Id),
+            Nickname = request.Nickname ?? string.Empty,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+        _db.Profiles.Add(profile);
+        await _db.SaveChangesAsync();
+
+        return Created(string.Empty, ApiResponse<AuthResponseDto>.Ok(authResponse, "Registration successful."));
+    }
+
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] AuthLoginRequest request)
+    {
+        if (IsPermanentAuthDisabled()) return PermanentAuthDisabledResponse();
+        var supabaseUrl = _config["Supabase:Url"];
+        var supabaseKey = _config["Supabase:Key"];
+
+        if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseKey))
+            return StatusCode(500, ApiResponse<object>.Fail("Supabase configuration is missing."));
+
+        using var http = _httpClientFactory.CreateClient();
+
+        var loginPayload = new { email = request.Email, password = request.Password };
+
+        var requestBody = new StringContent(
+            JsonSerializer.Serialize(loginPayload), Encoding.UTF8, "application/json");
+
+        var httpRequest = new HttpRequestMessage(HttpMethod.Post,
+            $"{supabaseUrl}/auth/v1/token?grant_type=password")
+        {
+            Content = requestBody
+        };
+        httpRequest.Headers.Add("apikey", supabaseKey);
+
+        var response = await http.SendAsync(httpRequest);
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var msg = ParseSupabaseError(responseBody, "Login failed.");
+            return Unauthorized(ApiResponse<object>.Fail(msg));
+        }
+
+        var authResponse = BuildAuthResponse(responseBody);
+        await ApplyProfileNicknameAsync(authResponse);
+
+        return Ok(ApiResponse<AuthResponseDto>.Ok(authResponse, "Login successful."));
+    }
+
+    [HttpPost("refresh")]
+    public async Task<IActionResult> Refresh([FromBody] RefreshRequest request)
+    {
+        if (string.IsNullOrEmpty(request.RefreshToken))
+            return BadRequest(ApiResponse<object>.Fail("Refresh token is required."));
+
+        var supabaseUrl = _config["Supabase:Url"];
+        var supabaseKey = _config["Supabase:Key"];
+
+        if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseKey))
+            return StatusCode(500, ApiResponse<object>.Fail("Supabase configuration is missing."));
+
+        using var http = _httpClientFactory.CreateClient();
+
+        var refreshPayload = new { refresh_token = request.RefreshToken };
+
+        var requestBody = new StringContent(
+            JsonSerializer.Serialize(refreshPayload), Encoding.UTF8, "application/json");
+
+        var httpRequest = new HttpRequestMessage(HttpMethod.Post,
+            $"{supabaseUrl}/auth/v1/token?grant_type=refresh_token")
+        {
+            Content = requestBody
+        };
+        httpRequest.Headers.Add("apikey", supabaseKey);
+
+        var response = await http.SendAsync(httpRequest);
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var msg = ParseSupabaseError(responseBody, "Sesi telah berakhir. Silakan login kembali.");
+            return Unauthorized(ApiResponse<object>.Fail(msg));
+        }
+
+        var authResponse = BuildAuthResponse(responseBody);
+        await ApplyProfileNicknameAsync(authResponse);
+
+        return Ok(ApiResponse<AuthResponseDto>.Ok(authResponse, "Token refreshed."));
+    }
+
+    /// <summary>
+    /// Overrides the response's FullName with the nickname stored in the profiles
+    /// table (creating the profile row from the token's display name on first use).
+    /// Shared by Login and Refresh so both return a consistent display name.
+    /// </summary>
+    private async Task ApplyProfileNicknameAsync(AuthResponseDto authResponse)
+    {
+        if (!Guid.TryParse(authResponse.User.Id, out var userId))
+            return;
+
+        var profile = await _db.Profiles.FindAsync(userId);
+        if (profile != null)
+        {
+            if (!string.IsNullOrEmpty(profile.Nickname))
+                authResponse.User.FullName = profile.Nickname;
+        }
+        else
+        {
+            var nickname = authResponse.User.FullName ?? "";
+            if (!string.IsNullOrEmpty(nickname))
+            {
+                profile = new Profile
+                {
+                    Id = userId,
+                    Nickname = nickname,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                _db.Profiles.Add(profile);
+                await _db.SaveChangesAsync();
+            }
+        }
+    }
+
+    [HttpGet("me")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> GetMe()
+    {
+        var subClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)
+                      ?? User.FindFirst("sub");
+        if (subClaim is null || !Guid.TryParse(subClaim.Value, out var userId))
+            return Unauthorized(ApiResponse<object>.Fail("User ID not found in token."));
+
+        var email = User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value 
+                    ?? User.FindFirst("email")?.Value;
+
+        var profile = await _db.Profiles.FindAsync(userId);
+        var nickname = profile?.Nickname;
+
+        if (string.IsNullOrEmpty(nickname))
+        {
+            var nameClaim = User.FindFirst("name")?.Value 
+                            ?? User.FindFirst("display_name")?.Value;
+            nickname = nameClaim;
+        }
+
+        var userDto = new UserDto
+        {
+            Id = userId.ToString(),
+            Email = email,
+            FullName = nickname,
+            ProfilePicture = profile?.ProfilePicture,
+            Role = User.FindFirst("role")?.Value ?? "authenticated",
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        return Ok(ApiResponse<UserDto>.Ok(userDto, "User profile retrieved successfully."));
+    }
+
+    // Cap profile-update payloads at 2 MB. With client-side resize+JPEG q80
+    // a profile picture should be well under 200 KB; the extra headroom
+    // covers nickname-only updates and any future fields without inviting
+    // multi-megabyte payloads that block the connection.
+    [HttpPut("me")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    [Microsoft.AspNetCore.Mvc.RequestSizeLimit(2 * 1024 * 1024)]
+    public async Task<IActionResult> UpdateMe([FromBody] UpdateProfileRequest request)
+    {
+        var subClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)
+                      ?? User.FindFirst("sub");
+        if (subClaim is null || !Guid.TryParse(subClaim.Value, out var userId))
+            return Unauthorized(ApiResponse<object>.Fail("User ID not found in token."));
+
+        if (request.ProfilePicture != null)
+        {
+            var pic = request.ProfilePicture.Trim();
+            if (!IsAllowedProfilePicture(pic, out var picError))
+                return BadRequest(ApiResponse<object>.Fail(picError));
+            request.ProfilePicture = pic;
+        }
+
+        var profile = await _db.Profiles.FindAsync(userId);
+        if (profile == null)
+        {
+            profile = new Profile { Id = userId, CreatedAt = DateTime.UtcNow };
+            _db.Profiles.Add(profile);
+        }
+
+        if (request.Nickname != null)
+            profile.Nickname = request.Nickname.Trim();
+        if (request.ProfilePicture != null)
+            profile.ProfilePicture = request.ProfilePicture;
+        profile.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+
+        return Ok(ApiResponse<object>.Ok(new { message = "Profile updated." }, "Profile updated successfully."));
+    }
+
+    // Hard cap on the stored picture string (data URL + metadata). ~1.4 MB
+    // accommodates a ~1 MB raw image after base64 inflation (×1.37).
+    private const int MaxProfilePictureLength = 1_400_000;
+
+    private static readonly string[] AllowedPictureMimePrefixes =
+    {
+        "data:image/jpeg;base64,",
+        "data:image/jpg;base64,",
+        "data:image/png;base64,",
+        "data:image/webp;base64,",
+    };
+
+    private static bool IsAllowedProfilePicture(string value, out string error)
+    {
+        if (value.Length == 0)
+        {
+            error = string.Empty; // empty string clears the picture; allowed
+            return true;
+        }
+
+        if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            error = string.Empty;
+            return true; // remote URL is fine; nothing to validate locally
+        }
+
+        if (!AllowedPictureMimePrefixes.Any(p => value.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+        {
+            error = "Format gambar tidak didukung. Gunakan JPEG, PNG, atau WebP.";
+            return false;
+        }
+
+        if (value.Length > MaxProfilePictureLength)
+        {
+            error = "Ukuran gambar terlalu besar. Maksimal 1 MB.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    [HttpPost("change-password")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        if (string.IsNullOrEmpty(request.CurrentPassword) ||
+            string.IsNullOrEmpty(request.NewPassword) ||
+            string.IsNullOrEmpty(request.ConfirmPassword))
+            return BadRequest(ApiResponse<object>.Fail("Semua kolom kata sandi harus diisi."));
+
+        if (request.NewPassword != request.ConfirmPassword)
+            return BadRequest(ApiResponse<object>.Fail("Kata sandi baru dan konfirmasi tidak cocok."));
+
+        if (request.NewPassword.Length < 6)
+            return BadRequest(ApiResponse<object>.Fail("Kata sandi baru minimal 6 karakter."));
+
+        var email = User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+                    ?? User.FindFirst("email")?.Value;
+        if (string.IsNullOrEmpty(email))
+            return Unauthorized(ApiResponse<object>.Fail("Email tidak ditemukan dalam token."));
+
+        var supabaseUrl = _config["Supabase:Url"];
+        var supabaseKey = _config["Supabase:Key"];
+
+        if (string.IsNullOrEmpty(supabaseUrl) || string.IsNullOrEmpty(supabaseKey))
+            return StatusCode(500, ApiResponse<object>.Fail("Supabase configuration is missing."));
+
+        using var http = _httpClientFactory.CreateClient();
+
+        // Step 1: Verify current password by attempting sign-in
+        var verifyPayload = new { email, password = request.CurrentPassword };
+        var verifyBody = new StringContent(
+            JsonSerializer.Serialize(verifyPayload), Encoding.UTF8, "application/json");
+
+        var verifyRequest = new HttpRequestMessage(HttpMethod.Post,
+            $"{supabaseUrl}/auth/v1/token?grant_type=password")
+        {
+            Content = verifyBody
+        };
+        verifyRequest.Headers.Add("apikey", supabaseKey);
+
+        var verifyResponse = await http.SendAsync(verifyRequest);
+        if (!verifyResponse.IsSuccessStatusCode)
+        {
+            return BadRequest(ApiResponse<object>.Fail("Kata sandi saat ini salah."));
+        }
+
+        // Step 2: Change password using the current access token
+        var authHeader = Request.Headers.Authorization.ToString();
+        var changePayload = new { password = request.NewPassword };
+        var changeBody = new StringContent(
+            JsonSerializer.Serialize(changePayload), Encoding.UTF8, "application/json");
+
+        var changeRequest = new HttpRequestMessage(HttpMethod.Put,
+            $"{supabaseUrl}/auth/v1/user")
+        {
+            Content = changeBody
+        };
+        changeRequest.Headers.Add("apikey", supabaseKey);
+        changeRequest.Headers.Add("Authorization", authHeader);
+
+        var changeResponse = await http.SendAsync(changeRequest);
+        var changeResponseBody = await changeResponse.Content.ReadAsStringAsync();
+
+        if (!changeResponse.IsSuccessStatusCode)
+        {
+            var msg = ParseSupabaseError(changeResponseBody, "Gagal mengubah kata sandi.");
+            return BadRequest(ApiResponse<object>.Fail(msg));
+        }
+
+        return Ok(ApiResponse<object>.Ok(new { message = "Password changed successfully." }, "Kata sandi berhasil diubah."));
+    }
+
+    /// <summary>
+    /// Parses a Supabase error response body into a human-readable message.
+    /// Supabase uses different error shapes depending on the endpoint:
+    ///   OAuth token errors:  { "error": "...", "error_description": "..." }
+    ///   Auth REST errors:    { "code": 400, "error_code": "...", "msg": "..." }
+    ///   GoTrue v2 errors:    { "message": "..." }
+    /// </summary>
+    private static string ParseSupabaseError(string responseBody, string fallback)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(responseBody);
+            var root = doc.RootElement;
+
+            // OAuth token endpoint format
+            if (root.TryGetProperty("error_description", out var ed) && ed.ValueKind == JsonValueKind.String)
+                return ed.GetString()!;
+
+            // GoTrue v2 / newer format
+            if (root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String)
+                return message.GetString()!;
+
+            // GoTrue v1 format
+            if (root.TryGetProperty("msg", out var msg) && msg.ValueKind == JsonValueKind.String)
+                return msg.GetString()!;
+
+            // Generic error field
+            if (root.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.String)
+                return err.GetString()!;
+        }
+        catch { /* JSON parse failed, fall through */ }
+
+        return fallback;
+    }
+
+    private static AuthResponseDto BuildAuthResponse(string supabaseResponseJson)
+    {
+        using var doc = JsonDocument.Parse(supabaseResponseJson);
+        var root = doc.RootElement;
+
+        var user = root.GetProperty("user");
+        var userId = user.GetProperty("id").GetString()!;
+        var email = user.GetProperty("email").GetString();
+        var createdAt = user.TryGetProperty("created_at", out var ca)
+            ? ca.GetDateTime() : DateTime.UtcNow;
+        var updatedAt = user.TryGetProperty("updated_at", out var ua)
+            ? ua.GetDateTime() : DateTime.UtcNow;
+
+        var metadata = user.TryGetProperty("user_metadata", out var um) ? um : default;
+        var fullName = metadata.ValueKind != JsonValueKind.Undefined
+            && metadata.TryGetProperty("display_name", out var fn) ? fn.GetString() : null;
+
+        return new AuthResponseDto
+        {
+            AccessToken = root.GetProperty("access_token").GetString()!,
+            RefreshToken = root.GetProperty("refresh_token").GetString()!,
+            ExpiresIn = root.GetProperty("expires_in").GetInt32(),
+            User = new UserDto
+            {
+                Id = userId,
+                Email = email,
+                FullName = fullName,
+                Role = user.TryGetProperty("role", out var r) ? r.GetString() : null,
+                IsActive = true,
+                CreatedAt = createdAt,
+                UpdatedAt = updatedAt,
+            },
+        };
+    }
+}
+
+public class AuthRegisterRequest
+{
+    public string Email { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+    public string? Nickname { get; set; }
+}
+
+public class AuthLoginRequest
+{
+    public string Email { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
+}
+
+public class RefreshRequest
+{
+    public string RefreshToken { get; set; } = string.Empty;
+}
+
+public class ChangePasswordRequest
+{
+    public string CurrentPassword { get; set; } = string.Empty;
+    public string NewPassword { get; set; } = string.Empty;
+    public string ConfirmPassword { get; set; } = string.Empty;
+}
+
+public class AuthResponseDto
+{
+    public string AccessToken { get; set; } = string.Empty;
+    public string RefreshToken { get; set; } = string.Empty;
+    public int ExpiresIn { get; set; }
+    public UserDto User { get; set; } = null!;
+}
