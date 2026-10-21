@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../../core/widgets/app_bottom_nav.dart';
+import '../../../core/widgets/app_scaffold_with_nav.dart';
 import '../../../core/widgets/responsive_center.dart';
 import '../../../routes/app_routes.dart';
 import '../../../core/widgets/home_header.dart';
@@ -23,25 +23,34 @@ class _ProfilePageState extends State<ProfilePage> {
       builder: (context, _) {
         final sw = MediaQuery.of(context).size.width;
         final sh = MediaQuery.of(context).size.height;
-        return Scaffold(
+        return AppScaffoldWithNav(
+          currentIndex: 2,
           backgroundColor: bg,
-          body: Stack(
-            children: [
-              _buildScatteredAuras(sw, sh, isDark),
-              SafeArea(
-                child: Column(
-                  children: [
-                    const ResponsiveCenter(maxWidth: 720, child: HomeHeader(isGuest: false, showProfile: false)),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                        child: ResponsiveCenter(
-                          maxWidth: 720,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
+          onNavTap: (i) {
+            final routes = [AppRoutes.home, AppRoutes.history, AppRoutes.profile];
+            if (i < routes.length) {
+              Navigator.pushNamedAndRemoveUntil(context, routes[i], (route) => false);
+            }
+          },
+          background: _buildScatteredAuras(sw, sh, isDark),
+          child: SafeArea(
+            child: Column(
+              children: [
+                const ResponsiveCenter(maxWidth: 720, child: HomeHeader(isGuest: false, showProfile: false)),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                    child: ResponsiveCenter(
+                      maxWidth: 720,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _buildAppInfoCard(isDark),
+                          const SizedBox(height: 16),
+                          ResponsiveGrid(
+                            spacing: 12,
+                            runSpacing: 12,
                             children: [
-                              _buildAppInfoCard(isDark),
-                              const SizedBox(height: 16),
                               _buildMenuItem(
                                 context,
                                 icon: Icons.settings_outlined,
@@ -50,32 +59,23 @@ class _ProfilePageState extends State<ProfilePage> {
                                 onTap: () => Navigator.pushNamed(context, AppRoutes.settings),
                                 isDark: isDark,
                               ),
-                              const SizedBox(height: 12),
                               _buildMenuItem(
                                 context,
                                 icon: Icons.info_outline_rounded,
                                 label: context.tr('profileAbout'),
+                                subtitle: context.tr('aboutSubtitle'),
                                 onTap: () => Navigator.pushNamed(context, AppRoutes.about),
                                 isDark: isDark,
                               ),
                             ],
                           ),
-                        ),
+                        ],
                       ),
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-          bottomNavigationBar: AppBottomNav(
-            currentIndex: 2,
-            onTap: (i) {
-              final routes = [AppRoutes.home, AppRoutes.history, AppRoutes.profile];
-              if (i < routes.length) {
-                Navigator.pushNamedAndRemoveUntil(context, routes[i], (route) => false);
-              }
-            },
+              ],
+            ),
           ),
         );
       },
@@ -142,15 +142,29 @@ class _ProfilePageState extends State<ProfilePage> {
           boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.08), blurRadius: 12, offset: const Offset(0, 4))],
         ),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Container(width: 40, height: 40, decoration: BoxDecoration(shape: BoxShape.circle, color: color.withValues(alpha: 0.1)), child: Icon(icon, size: 20, color: color)),
             const SizedBox(width: 14),
             Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: destructive ? color : fg, letterSpacing: -0.2)),
-                if (subtitle != null) Text(subtitle, style: TextStyle(fontSize: 11, color: mutedFg.withValues(alpha: 0.8))),
-              ]),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: destructive ? color : fg, letterSpacing: -0.2)),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(fontSize: 11, color: mutedFg.withValues(alpha: 0.8)),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
             ),
+            const SizedBox(width: 8),
             Icon(Icons.chevron_right_rounded, size: 20, color: mutedFg.withValues(alpha: 0.5)),
           ],
         ),

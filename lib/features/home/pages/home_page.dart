@@ -5,7 +5,7 @@ import '../../../core/models/assessment_config_models.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../routes/app_routes.dart';
 import '../../../core/widgets/home_header.dart';
-import '../../../core/widgets/app_bottom_nav.dart';
+import '../../../core/widgets/app_scaffold_with_nav.dart';
 import '../../../core/widgets/responsive_center.dart';
 import '../../../core/l10n/l10n.dart';
 import '../../../core/settings/app_settings.dart';
@@ -133,56 +133,50 @@ class _HomePageState extends State<HomePage> {
     final screenWidth = MediaQuery.of(context).size.width;
     final screenHeight = MediaQuery.of(context).size.height;
 
-    return Scaffold(
+    return AppScaffoldWithNav(
+      currentIndex: 0,
       backgroundColor: bg,
-      body: Stack(
-        children: [
-          _buildScatteredAuras(screenWidth, screenHeight, isDark),
-          SafeArea(
-            child: Column(
-              children: [
-                const ResponsiveCenter(
-                  maxWidth: 720,
-                  child: HomeHeader(isGuest: false),
-                ),
-                Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: _refreshAll,
-                    color: isDark ? AppColors.darkPrimary : AppColors.primary,
-                    child: SingleChildScrollView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                      child: ResponsiveCenter(
-                        maxWidth: 720,
-                        child: Column(
-                          children: [
-                            if (_loadingConfig || _loadingMostRecent)
-                              _buildLoadingCard(isDark)
-                            else if (_mostRecentAssessment != null)
-                              _buildRecentResultCard(isDark)
-                            else if (_hasStoredResult)
-                              _buildStoredResultCard(isDark)
-                            else
-                              _buildAssessmentCard(isDark),
-                          ],
-                        ),
-                      ),
+      onNavTap: (i) {
+        final routes = [AppRoutes.home, AppRoutes.history, AppRoutes.profile];
+        if (i < routes.length) {
+          Navigator.pushNamedAndRemoveUntil(context, routes[i], (route) => false);
+        }
+      },
+      background: _buildScatteredAuras(screenWidth, screenHeight, isDark),
+      child: SafeArea(
+        child: Column(
+          children: [
+            const ResponsiveCenter(
+              maxWidth: 720,
+              child: HomeHeader(isGuest: false),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _refreshAll,
+                color: isDark ? AppColors.darkPrimary : AppColors.primary,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: ResponsiveCenter(
+                    maxWidth: 720,
+                    child: Column(
+                      children: [
+                        if (_loadingConfig || _loadingMostRecent)
+                          _buildLoadingCard(isDark)
+                        else if (_mostRecentAssessment != null)
+                          _buildRecentResultCard(isDark)
+                        else if (_hasStoredResult)
+                          _buildStoredResultCard(isDark)
+                        else
+                          _buildAssessmentCard(isDark),
+                      ],
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
-          ),
-        ],
-      ),
-      bottomNavigationBar: AppBottomNav(
-        currentIndex: 0,
-        onTap: (i) {
-          final routes = [AppRoutes.home, AppRoutes.history, AppRoutes.profile];
-          if (i < routes.length) {
-            Navigator.pushNamedAndRemoveUntil(context, routes[i], (route) => false);
-          }
-        },
+          ],
+        ),
       ),
     );
   }
@@ -231,7 +225,11 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
             const SizedBox(height: 18),
-            ...config.questions.map((q) => Padding(padding: const EdgeInsets.only(bottom: 10), child: _buildSymptomItem(q, isDark))),
+            ResponsiveGrid(
+              spacing: 10,
+              runSpacing: 10,
+              children: config.questions.map((q) => _buildSymptomItem(q, isDark)).toList(),
+            ),
             const SizedBox(height: 18),
             _buildCheckButton(isDark),
             const SizedBox(height: 10),
@@ -570,8 +568,17 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _onRetakeAssessment(bool isFullAssessment) async {
-    if (isFullAssessment) Navigator.pushNamed(context, AppRoutes.fullAssessment);
-    else setState(() {_storedResult = null; if (_config != null) _symptomStates = {for (final q in _config!.questions) q.symptomId: false}; _mostRecentAssessment = null;});
+    if (isFullAssessment) {
+      Navigator.pushNamed(context, AppRoutes.fullAssessment);
+    } else {
+      setState(() {
+        _storedResult = null;
+        if (_config != null) {
+          _symptomStates = {for (final q in _config!.questions) q.symptomId: false};
+        }
+        _mostRecentAssessment = null;
+      });
+    }
   }
 
   Color _colorForRisk(String code, bool isDark) {

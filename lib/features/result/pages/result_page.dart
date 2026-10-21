@@ -5,7 +5,7 @@ import '../../../core/models/assessment_config_models.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../routes/app_routes.dart';
 import '../../../core/widgets/home_header.dart';
-import '../../../core/widgets/app_bottom_nav.dart';
+import '../../../core/widgets/app_scaffold_with_nav.dart';
 import '../../../core/widgets/responsive_center.dart';
 import '../../../core/l10n/l10n.dart';
 import '../../../core/l10n/tb_content_l10n.dart';
@@ -65,8 +65,9 @@ class _ResultPageState extends State<ResultPage> {
           _fullResultData = raw['result'] as Map<String, dynamic>?;
         } else {
           final rl = raw['riskLevel'];
-          if (rl is RiskLevel) _currentRisk = rl;
-          else if (rl is String) {
+          if (rl is RiskLevel) {
+            _currentRisk = rl;
+          } else if (rl is String) {
             switch (rl.toLowerCase()) {
               case 'high':
                 _currentRisk = RiskLevel.high;
@@ -94,13 +95,20 @@ class _ResultPageState extends State<ResultPage> {
 
   Future<void> _openSymptomInsight(Color mainColor, IconData riskIcon) async {
     if (_assessmentData == null) return;
+    final defaultTitle = context.tr('homeRiskLowTitle');
+    final dateStr = context.tr('historyDateNow');
+    final checkType = context.tr('homeQuickCheck');
+    final nav = Navigator.of(context);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final failedMsg = context.tr('resultFailedSymptom');
+
     final symptoms = _assessmentData!['symptoms'] as Map<String, dynamic>? ?? {};
     QuickCheckConfig config;
     try {
       config = await LocalAssessmentService.getQuickCheckConfig();
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.tr('resultFailedSymptom'))));
+      scaffoldMessenger.showSnackBar(SnackBar(content: Text(failedMsg)));
       return;
     }
     final Map<int, List<Map<String, dynamic>>> byTbType = {};
@@ -119,12 +127,12 @@ class _ResultPageState extends State<ResultPage> {
       final items = <Map<String, dynamic>>[];
       for (final entry in byTbType.entries) {
         final typeId = entry.key;
-        items.add({'primaryTbTypeId': typeId, 'primaryTbTypeName': tbTypeNames[typeId] ?? 'Unknown', 'totalScore': _percentage, 'riskLevelTitle': _assessmentData!['riskTitle'] ?? context.tr('homeRiskLowTitle'), 'riskLevelCode': _assessmentData!['riskCode'] ?? 'LOW', 'selectedSymptoms': entry.value, 'scoreBreakdown': {'results': [{'riskLevel': {'recommendation': _assessmentData!['description'] ?? ''}}]}});
+        items.add({'primaryTbTypeId': typeId, 'primaryTbTypeName': tbTypeNames[typeId] ?? 'Unknown', 'totalScore': _percentage, 'riskLevelTitle': _assessmentData!['riskTitle'] ?? defaultTitle, 'riskLevelCode': _assessmentData!['riskCode'] ?? 'LOW', 'selectedSymptoms': entry.value, 'scoreBreakdown': {'results': [{'riskLevel': {'recommendation': _assessmentData!['description'] ?? ''}}]}});
       }
       detail = {'items': items, 'createdAt': DateTime.now().toIso8601String(), 'assessmentTypeName': 'Quick Assessment'};
     }
     if (!mounted) return;
-    Navigator.pushNamed(context, AppRoutes.historyDetail, arguments: {'sessionKey': '', 'date': context.tr('historyDateNow'), 'riskLevel': _assessmentData!['riskTitle'] ?? context.tr('homeRiskLowTitle'), 'riskLevelCode': _assessmentData!['riskCode'] ?? 'LOW', 'percentage': '$_percentage%', 'tbType': '', 'type': context.tr('homeQuickCheck'), 'color': mainColor, 'icon': riskIcon, 'detailData': detail});
+    nav.pushNamed(AppRoutes.historyDetail, arguments: {'sessionKey': '', 'date': dateStr, 'riskLevel': _assessmentData!['riskTitle'] ?? defaultTitle, 'riskLevelCode': _assessmentData!['riskCode'] ?? 'LOW', 'percentage': '$_percentage%', 'tbType': '', 'type': checkType, 'color': mainColor, 'icon': riskIcon, 'detailData': detail});
   }
 
   Map<String, dynamic> _getRiskData() {
@@ -172,10 +180,15 @@ class _ResultPageState extends State<ResultPage> {
     final bg = isDark ? AppColors.darkBackground : AppColors.background;
     final sw = MediaQuery.of(context).size.width;
     final sh = MediaQuery.of(context).size.height;
-    return Scaffold(
+    return AppScaffoldWithNav(
+      currentIndex: 0,
       backgroundColor: bg,
-      body: Stack(children: [_buildScatteredAuras(sw, sh, isDark), _isFullAssessment && _fullResultData != null ? _buildFullResultView(isDark) : _buildQuickResultView(isDark)]),
-      bottomNavigationBar: AppBottomNav(currentIndex: 0, onTap: (i) { final routes = [AppRoutes.home, AppRoutes.history, AppRoutes.profile]; if (i < routes.length) Navigator.pushNamedAndRemoveUntil(context, routes[i], (route) => false); }),
+      onNavTap: (i) {
+        final routes = [AppRoutes.home, AppRoutes.history, AppRoutes.profile];
+        if (i < routes.length) Navigator.pushNamedAndRemoveUntil(context, routes[i], (route) => false);
+      },
+      background: _buildScatteredAuras(sw, sh, isDark),
+      child: _isFullAssessment && _fullResultData != null ? _buildFullResultView(isDark) : _buildQuickResultView(isDark),
     );
   }
 
@@ -197,23 +210,59 @@ class _ResultPageState extends State<ResultPage> {
   Widget _buildFullResultView(bool isDark) {
     final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
     final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
+
+    final sortedResults = List<Map<String, dynamic>>.from((_fullResultData!['results'] as List).cast<Map<String, dynamic>>());
+    sortedResults.sort((a, b) {
+      String? codeOf(Map<String, dynamic> m) => (m['riskLevel'] as Map<String, dynamic>?)?['code'] as String?;
+      final ra = _riskRank(codeOf(a));
+      final rb = _riskRank(codeOf(b));
+      if (ra != rb) return rb.compareTo(ra);
+      return ((b['totalScore'] as num?)?.toDouble() ?? 0).compareTo((a['totalScore'] as num?)?.toDouble() ?? 0);
+    });
+
+    final hasMediumOrModerateRisk = sortedResults.any((r) {
+      final code = ((r['riskLevel'] as Map<String, dynamic>?)?['code'] ?? '').toString().toUpperCase();
+      return code.contains('MEDIUM') || code.contains('MODERATE') || code.contains('SEDANG');
+    });
+
     return SafeArea(
       child: CustomScrollView(slivers: [
         const SliverToBoxAdapter(child: ResponsiveCenter(maxWidth: 720, child: HomeHeader(isGuest: false))),
         SliverToBoxAdapter(child: ResponsiveCenter(maxWidth: 720, padding: const EdgeInsets.fromLTRB(20, 0, 20, 16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(context.tr('resultFullTitle'), style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: fg, letterSpacing: -0.6)), const SizedBox(height: 6), Text(context.tr('resultFullSubtitle'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: mutedFg))]))),
         SliverList(delegate: SliverChildBuilderDelegate((context, index) {
-          final sortedResults = List<Map<String, dynamic>>.from((_fullResultData!['results'] as List).cast<Map<String, dynamic>>());
-          sortedResults.sort((a, b) {
-            String? codeOf(Map<String, dynamic> m) => (m['riskLevel'] as Map<String, dynamic>?)?['code'] as String?;
-            final ra = _riskRank(codeOf(a));
-            final rb = _riskRank(codeOf(b));
-            if (ra != rb) return rb.compareTo(ra);
-            return ((b['totalScore'] as num?)?.toDouble() ?? 0).compareTo((a['totalScore'] as num?)?.toDouble() ?? 0);
-          });
           final result = sortedResults[index];
           return ResponsiveCenter(maxWidth: 720, padding: const EdgeInsets.fromLTRB(16, 0, 16, 14), child: _buildCategoryResultCard(result, isDark));
-        }, childCount: (_fullResultData!['results'] as List).length)),
-        SliverToBoxAdapter(child: ResponsiveCenter(maxWidth: 720, padding: const EdgeInsets.fromLTRB(16, 0, 16, 32), child: Column(children: [SizedBox(width: double.infinity, height: 48, child: ElevatedButton.icon(onPressed: _goHome, icon: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 18), label: Text(context.tr('resultBackHome'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)), style: ElevatedButton.styleFrom(backgroundColor: isDark ? AppColors.darkPrimary : AppColors.primary, foregroundColor: Colors.white, elevation: 4, shadowColor: (isDark ? AppColors.darkPrimary : AppColors.primary).withValues(alpha: 0.3), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)))))]))),
+        }, childCount: sortedResults.length)),
+        SliverToBoxAdapter(
+          child: ResponsiveCenter(
+            maxWidth: 720,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+            child: Column(
+              children: [
+                if (hasMediumOrModerateRisk) ...[
+                  _buildNearestClinicButton(isDark),
+                  const SizedBox(height: 12),
+                ],
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    onPressed: _goHome,
+                    icon: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 18),
+                    label: Text(context.tr('resultBackHome'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isDark ? AppColors.darkPrimary : AppColors.primary,
+                      foregroundColor: Colors.white,
+                      elevation: 4,
+                      shadowColor: (isDark ? AppColors.darkPrimary : AppColors.primary).withValues(alpha: 0.3),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ]),
     );
   }
@@ -236,14 +285,12 @@ class _ResultPageState extends State<ResultPage> {
     final selectedSymptoms = symptoms.where((s) => (s['cfValue'] as num?)?.toDouble() == 1.0).toList();
     final containerColor = color.withValues(alpha: 0.06);
     final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
-    final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
     return Container(
       decoration: BoxDecoration(color: containerColor, borderRadius: BorderRadius.circular(20), border: Border.all(color: color.withValues(alpha: 0.2), width: 1.2)),
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: fg)), const SizedBox(height: 3), Text('$riskTitle', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color))])), Column(children: [Text('$score%', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: color, height: 1)), const SizedBox(height: 4), Icon(riskIcon, color: color, size: 22)])]),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: fg)), const SizedBox(height: 3), Text(riskTitle, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color))])), Column(children: [Text('$score%', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: color, height: 1)), const SizedBox(height: 4), Icon(riskIcon, color: color, size: 22)])]),
         if (selectedSymptoms.isNotEmpty) ...[const SizedBox(height: 14), _buildSymptomGroups(selectedSymptoms, color, result['tbTypeId'] as int? ?? 0, isDark)],
-        if (riskCode.contains('MEDIUM') || riskCode.contains('MODERATE')) ...[const SizedBox(height: 14), _buildNearestClinicButton(isDark)],
       ]),
     );
   }
@@ -253,8 +300,44 @@ class _ResultPageState extends State<ResultPage> {
     final umum = symptoms.where((s) { final code = (s['symptomCode'] as String?) ?? ''; if (!code.startsWith('G')) return false; final digits = code.replaceAll(RegExp(r'[^0-9]'), ''); final numPart = int.tryParse(digits); return numPart != null && numPart >= 1 && numPart <= 8 && !code.contains(RegExp(r'[a-z]')); }).toList();
     final khusus = symptoms.where((s) { final code = (s['symptomCode'] as String?) ?? ''; if (!code.startsWith('G')) return true; final digits = code.replaceAll(RegExp(r'[^0-9]'), ''); final numPart = int.tryParse(digits); return numPart == null || numPart > 8 || code.contains(RegExp(r'[a-z]')); }).toList();
     final isTbType1 = currentTbTypeId == 1;
-    if (isTbType1) return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(context.tr('resultSymptomSelected', {'count': '${symptoms.length}'}), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: mutedFg.withValues(alpha: 0.9))), const SizedBox(height: 8), ...symptoms.map((s) => _buildSymptomChip(s, color, isDark))]);
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [if (umum.isNotEmpty) ...[Text(context.tr('resultCommonSymptom', {'count': '${umum.length}'}), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: mutedFg.withValues(alpha: 0.9))), const SizedBox(height: 8), ...umum.map((s) => _buildSymptomChip(s, color, isDark)), if (khusus.isNotEmpty) const SizedBox(height: 12)], if (khusus.isNotEmpty) ...[Text(context.tr('resultSpecificSymptom', {'count': '${khusus.length}'}), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: mutedFg.withValues(alpha: 0.9))), const SizedBox(height: 8), ...khusus.map((s) => _buildSymptomChip(s, color, isDark))]]);
+    if (isTbType1) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(context.tr('resultSymptomSelected', {'count': '${symptoms.length}'}), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: mutedFg.withValues(alpha: 0.9))),
+          const SizedBox(height: 8),
+          ResponsiveGrid(
+            spacing: 8,
+            runSpacing: 6,
+            children: symptoms.map((s) => _buildSymptomChip(s, color, isDark)).toList(),
+          ),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (umum.isNotEmpty) ...[
+          Text(context.tr('resultCommonSymptom', {'count': '${umum.length}'}), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: mutedFg.withValues(alpha: 0.9))),
+          const SizedBox(height: 8),
+          ResponsiveGrid(
+            spacing: 8,
+            runSpacing: 6,
+            children: umum.map((s) => _buildSymptomChip(s, color, isDark)).toList(),
+          ),
+          if (khusus.isNotEmpty) const SizedBox(height: 12),
+        ],
+        if (khusus.isNotEmpty) ...[
+          Text(context.tr('resultSpecificSymptom', {'count': '${khusus.length}'}), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: mutedFg.withValues(alpha: 0.9))),
+          const SizedBox(height: 8),
+          ResponsiveGrid(
+            spacing: 8,
+            runSpacing: 6,
+            children: khusus.map((s) => _buildSymptomChip(s, color, isDark)).toList(),
+          ),
+        ],
+      ],
+    );
   }
 
   Widget _buildSymptomChip(Map<String, dynamic> s, Color color, bool isDark) {

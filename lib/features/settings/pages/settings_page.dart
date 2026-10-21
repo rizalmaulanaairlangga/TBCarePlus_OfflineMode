@@ -162,29 +162,41 @@ class SettingsPage extends StatelessWidget {
   }
 
   Widget _buildHeader(BuildContext context, Color fg, Color card, bool isDark) {
+    final isLandscape = MediaQuery.orientationOf(context) == Orientation.landscape;
+    final isShort = MediaQuery.sizeOf(context).height < 500;
+    final isCompact = isLandscape && isShort;
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      padding: EdgeInsets.symmetric(
+        horizontal: isCompact ? 16 : 20,
+        vertical: isCompact ? 8 : 16,
+      ),
       child: Row(
         children: [
           GestureDetector(
             onTap: () => Navigator.pop(context),
             child: Container(
-              width: 40,
-              height: 40,
+              width: isCompact ? 34 : 40,
+              height: isCompact ? 34 : 40,
               decoration: BoxDecoration(
                 color: card.withValues(alpha: isDark ? 0.9 : 0.75),
                 shape: BoxShape.circle,
                 border: Border.all(color: isDark ? AppColors.darkBorder : Colors.white),
                 boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
               ),
-              child: Icon(Icons.arrow_back, color: fg, size: 20),
+              child: Icon(Icons.arrow_back, color: fg, size: isCompact ? 18 : 20),
             ),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: isCompact ? 12 : 16),
           Expanded(
             child: Text(
               context.tr('settingsTitle'),
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: fg, letterSpacing: -0.3),
+              style: TextStyle(
+                fontSize: isCompact ? 16 : 18,
+                fontWeight: FontWeight.w800,
+                color: fg,
+                letterSpacing: -0.3,
+              ),
             ),
           ),
         ],
@@ -501,7 +513,6 @@ class SettingsPage extends StatelessWidget {
       case ColorBlindMode.highContrast:
         return isDark ? [const Color(0xFFFFFF00), const Color(0xFFFFD600), const Color(0xFFFF5252)] : [const Color(0xFF000000), const Color(0xFFB45309), const Color(0xFFB91C1C)];
       case ColorBlindMode.normal:
-      default:
         return isDark ? [const Color(0xFF34D399), const Color(0xFFFBBF24), const Color(0xFFF87171)] : [const Color(0xFF10B981), const Color(0xFFF59E0B), const Color(0xFFEF4444)];
     }
   }

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../core/services/local_assessment_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/home_header.dart';
-import '../../../core/widgets/app_bottom_nav.dart';
+import '../../../core/widgets/app_scaffold_with_nav.dart';
 import '../../../core/widgets/responsive_center.dart';
 import '../../../routes/app_routes.dart';
 import '../../../core/l10n/l10n.dart';
@@ -92,65 +92,59 @@ class _HistoryPageState extends State<HistoryPage> {
     final screenWidth = MediaQuery.of(context).size.width;
     final screenHeight = MediaQuery.of(context).size.height;
 
-    return Scaffold(
+    return AppScaffoldWithNav(
+      currentIndex: 1,
       backgroundColor: bg,
-      body: Stack(
-        children: [
-          _buildScatteredAuras(screenWidth, screenHeight, isDark),
-          SafeArea(
-            child: Column(
-              children: [
-                const ResponsiveCenter(maxWidth: 720, child: HomeHeader(isGuest: false)),
-                Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: _fetchHistory,
-                    color: isDark ? AppColors.darkPrimary : AppColors.primary,
-                    child: SingleChildScrollView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                      child: ResponsiveCenter(
-                        maxWidth: 720,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(context.tr('historyTitle'), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: isDark ? AppColors.darkForeground : AppColors.foreground, letterSpacing: -0.8)),
-                            Text(context.tr('historySubtitle'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: isDark ? AppColors.darkPrimary : AppColors.primary)),
-                            const SizedBox(height: 18),
-                            _loading
-                                ? const Padding(padding: EdgeInsets.only(top: 60), child: Center(child: CircularProgressIndicator()))
-                                : _error != null
-                                    ? Center(
-                                        child: Padding(
-                                          padding: const EdgeInsets.only(top: 40),
-                                          child: Column(
-                                            children: [
-                                              Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: isDark ? AppColors.darkDestructive : AppColors.destructive)),
-                                              const SizedBox(height: 12),
-                                              ElevatedButton(onPressed: _fetchHistory, child: Text('Coba Lagi')),
-                                            ],
-                                          ),
-                                        ),
-                                      )
-                                    : _historyItems.isEmpty
-                                        ? _buildEmptyState(isDark)
-                                        : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_buildDeleteAllBar(isDark), const SizedBox(height: 14), _buildTimelineList(isDark)]),
-                          ],
-                        ),
-                      ),
+      onNavTap: (i) {
+        final routes = [AppRoutes.home, AppRoutes.history, AppRoutes.profile];
+        if (i < routes.length) Navigator.pushNamedAndRemoveUntil(context, routes[i], (route) => false);
+      },
+      background: _buildScatteredAuras(screenWidth, screenHeight, isDark),
+      child: SafeArea(
+        child: Column(
+          children: [
+            const ResponsiveCenter(maxWidth: 720, child: HomeHeader(isGuest: false)),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _fetchHistory,
+                color: isDark ? AppColors.darkPrimary : AppColors.primary,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: ResponsiveCenter(
+                    maxWidth: 720,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(context.tr('historyTitle'), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: isDark ? AppColors.darkForeground : AppColors.foreground, letterSpacing: -0.8)),
+                        Text(context.tr('historySubtitle'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: isDark ? AppColors.darkPrimary : AppColors.primary)),
+                        const SizedBox(height: 18),
+                        _loading
+                            ? const Padding(padding: EdgeInsets.only(top: 60), child: Center(child: CircularProgressIndicator()))
+                            : _error != null
+                                ? Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(top: 40),
+                                      child: Column(
+                                        children: [
+                                          Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: isDark ? AppColors.darkDestructive : AppColors.destructive)),
+                                          const SizedBox(height: 12),
+                                          ElevatedButton(onPressed: _fetchHistory, child: Text('Coba Lagi')),
+                                        ],
+                                      ),
+                                    ),
+                                  )
+                                : _historyItems.isEmpty
+                                    ? _buildEmptyState(isDark)
+                                    : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_buildDeleteAllBar(isDark), const SizedBox(height: 14), _buildTimelineList(isDark)]),
+                      ],
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
-          ),
-        ],
-      ),
-      bottomNavigationBar: AppBottomNav(
-        currentIndex: 1,
-        onTap: (i) {
-          final routes = [AppRoutes.home, AppRoutes.history, AppRoutes.profile];
-          if (i < routes.length) Navigator.pushNamedAndRemoveUntil(context, routes[i], (route) => false);
-        },
+          ],
+        ),
       ),
     );
   }
@@ -193,6 +187,7 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 
   Widget _buildTimelineList(bool isDark) {
+    final isTablet = MediaQuery.sizeOf(context).width >= Breakpoints.compact;
     return ListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -231,7 +226,18 @@ class _HistoryPageState extends State<HistoryPage> {
             children: [
               Column(children: [Container(width: 14, height: 14, decoration: BoxDecoration(color: item['color'] as Color, shape: BoxShape.circle, border: Border.all(color: isDark ? AppColors.darkSurface : Colors.white, width: 2), boxShadow: [BoxShadow(color: (item['color'] as Color).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 2))])), Expanded(child: Container(width: 2, color: (item['color'] as Color).withValues(alpha: 0.2)))]),
               const SizedBox(width: 14),
-              Expanded(child: Padding(padding: const EdgeInsets.only(bottom: 16), child: GestureDetector(onTap: () async { final result = await Navigator.pushNamed(context, AppRoutes.historyDetail, arguments: item); if (result == true && mounted) await _fetchHistory(); }, child: _buildHistoryCard(item, isDark)))),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: isTablet ? 18 : 16),
+                  child: GestureDetector(
+                    onTap: () async {
+                      final result = await Navigator.pushNamed(context, AppRoutes.historyDetail, arguments: item);
+                      if (result == true && mounted) await _fetchHistory();
+                    },
+                    child: _buildHistoryCard(item, isDark, isTablet: isTablet),
+                  ),
+                ),
+              ),
             ],
           ),
         );
@@ -239,11 +245,11 @@ class _HistoryPageState extends State<HistoryPage> {
     );
   }
 
-  Widget _buildHistoryCard(Map<String, dynamic> item, bool isDark) {
+  Widget _buildHistoryCard(Map<String, dynamic> item, bool isDark, {bool isTablet = false}) {
     final color = item['color'] as Color;
     final mutedFg = isDark ? AppColors.darkMutedForeground : AppColors.mutedForeground;
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(isTablet ? 20 : 16),
       decoration: BoxDecoration(color: (isDark ? AppColors.darkSurface : Colors.white).withValues(alpha: isDark ? 1.0 : 0.7), borderRadius: BorderRadius.circular(20), border: Border.all(color: color.withValues(alpha: 0.2), width: 1.2), boxShadow: [BoxShadow(color: color.withValues(alpha: 0.08), blurRadius: 16, offset: const Offset(0, 6))]),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

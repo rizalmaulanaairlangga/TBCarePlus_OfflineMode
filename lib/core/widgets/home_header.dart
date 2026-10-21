@@ -34,18 +34,29 @@ class HomeHeader extends StatelessWidget {
 
   Widget _buildContent(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isLandscape = MediaQuery.orientationOf(context) == Orientation.landscape;
+    final isShort = MediaQuery.sizeOf(context).height < 500;
+    final isLandscapePhone = isLandscape && isShort;
+    final logoSize = isLandscapePhone ? 34.0 : 48.0;
+    final iconSize = isLandscapePhone ? 20.0 : 30.0;
+    final verticalPad = isLandscapePhone ? 4.0 : 12.0;
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: EdgeInsets.symmetric(
+        horizontal: isLandscapePhone ? 12 : 16,
+        vertical: verticalPad,
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           // Left: Logo + App Name
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 48,
-                height: 48,
+                width: logoSize,
+                height: logoSize,
                 decoration: BoxDecoration(
                   color: isDark ? AppColors.darkSurface : Colors.white,
                   shape: BoxShape.circle,
@@ -53,13 +64,13 @@ class HomeHeader extends StatelessWidget {
                   boxShadow: [BoxShadow(color: (isDark ? AppColors.darkPrimary : AppColors.primary).withValues(alpha: 0.1), blurRadius: 8, offset: const Offset(0, 3))],
                 ),
                 child: Center(
-                  child: Image.asset('assets/images/img_logo_app.png', width: 30, height: 30, fit: BoxFit.contain, errorBuilder: (context, error, stackTrace) => Icon(Icons.shield_outlined, color: isDark ? AppColors.darkPrimary : AppColors.primary, size: 20)),
+                  child: Image.asset('assets/images/img_logo_app.png', width: iconSize, height: iconSize, fit: BoxFit.contain, errorBuilder: (context, error, stackTrace) => Icon(Icons.shield_outlined, color: isDark ? AppColors.darkPrimary : AppColors.primary, size: 20)),
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               RichText(
                 text: TextSpan(
-                  style: TextStyle(fontSize: 18, color: isDark ? AppColors.darkForeground : const Color(0xFF076453), letterSpacing: -0.4),
+                  style: TextStyle(fontSize: isLandscapePhone ? 15 : 18, color: isDark ? AppColors.darkForeground : const Color(0xFF076453), letterSpacing: -0.4),
                   children: [
                     const TextSpan(
                       text: 'TB',
@@ -71,13 +82,13 @@ class HomeHeader extends StatelessWidget {
                     ),
                     WidgetSpan(
                       child: Transform.translate(
-                        offset: const Offset(0, -6),
-                        child: const Text(
+                        offset: Offset(0, isLandscapePhone ? -3 : -6),
+                        child: Text(
                           '+',
                           style: TextStyle(
-                            fontSize: 20,
+                            fontSize: isLandscapePhone ? 16 : 20,
                             fontWeight: FontWeight.w900,
-                            color: Color(0xFF00BC99),
+                            color: const Color(0xFF00BC99),
                           ),
                         ),
                       ),
@@ -106,8 +117,8 @@ class HomeHeader extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
-                    width: 48,
-                    height: 48,
+                    width: logoSize,
+                    height: logoSize,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       gradient:
@@ -119,7 +130,7 @@ class HomeHeader extends StatelessWidget {
                             )
                           : null,
                       color: isGuest ? AppColors.muted.withValues(alpha: 0.3) : null,
-                      border: Border.all(color: Colors.white, width: 2),
+                      border: Border.all(color: Colors.white, width: isLandscapePhone ? 1.5 : 2),
                       image:
                           (!isGuest &&
                               profilePicture != null &&
@@ -132,8 +143,8 @@ class HomeHeader extends StatelessWidget {
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
+                          blurRadius: isLandscapePhone ? 6 : 10,
+                          offset: Offset(0, isLandscapePhone ? 2 : 4),
                         ),
                       ],
                     ),
@@ -141,14 +152,14 @@ class HomeHeader extends StatelessWidget {
                         ? Icon(
                             Icons.person_outline_rounded,
                             color: AppColors.mutedForeground,
-                            size: 24,
+                            size: isLandscapePhone ? 18 : 24,
                           )
                         : (profilePicture == null || profilePicture!.isEmpty)
                         ? Center(
                             child: Text(
                               (userName ?? 'U')[0].toUpperCase(),
-                              style: const TextStyle(
-                                fontSize: 20,
+                              style: TextStyle(
+                                fontSize: isLandscapePhone ? 14 : 20,
                                 fontWeight: FontWeight.w800,
                                 color: Colors.white,
                               ),

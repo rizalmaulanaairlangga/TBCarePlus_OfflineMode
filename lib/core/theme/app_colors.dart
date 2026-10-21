@@ -76,7 +76,6 @@ class AppColors {
       case ColorBlindMode.highContrast:
         return _highContrastLight(pick);
       case ColorBlindMode.normal:
-      default:
         return pick(_Palette.normalLight);
     }
   }
@@ -92,7 +91,6 @@ class AppColors {
       case ColorBlindMode.highContrast:
         return _highContrastDark(pick);
       case ColorBlindMode.normal:
-      default:
         return pick(_Palette.normalDark);
     }
   }
