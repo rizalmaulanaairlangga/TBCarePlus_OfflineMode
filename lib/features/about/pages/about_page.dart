@@ -121,129 +121,7 @@ class AboutPage extends StatelessWidget {
   }
 
   Widget _buildHeaderContent(BuildContext context, bool isDark) {
-    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
-    final mutedFg = isDark
-        ? AppColors.darkMutedForeground
-        : AppColors.mutedForeground;
-    final card = isDark ? AppColors.darkSurface : Colors.white;
-    final isLandscape =
-        MediaQuery.orientationOf(context) == Orientation.landscape;
-    final isShort = MediaQuery.sizeOf(context).height < 500;
-    final isCompact = isLandscape && isShort;
-
-    if (isCompact) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            GestureDetector(
-              onTap: () => Navigator.pop(context),
-              child: Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: card.withValues(alpha: 0.9),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: isDark ? AppColors.darkBorder : Colors.white,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.05),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Icon(Icons.arrow_back, color: fg, size: 18),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    context.tr('aboutTitle'),
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      color: fg,
-                      letterSpacing: -0.4,
-                      height: 1.1,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    context.tr('aboutSubtitle'),
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: mutedFg,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          GestureDetector(
-            onTap: () => Navigator.pop(context),
-            child: Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: card.withValues(alpha: 0.9),
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: isDark ? AppColors.darkBorder : Colors.white,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Icon(Icons.arrow_back, color: fg, size: 18),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            context.tr('aboutTitle'),
-            style: TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-              color: fg,
-              letterSpacing: -0.8,
-              height: 1.0,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            context.tr('aboutSubtitle'),
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: mutedFg,
-            ),
-          ),
-        ],
-      ),
-    );
+    return AboutPageHeader(isDark: isDark);
   }
 
   Widget _buildInfoCard({
@@ -893,4 +771,88 @@ class AboutPage extends StatelessWidget {
       ],
     ),
   );
+}
+
+class AboutPageHeader extends StatelessWidget {
+  final bool isDark;
+
+  const AboutPageHeader({super.key, required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = isDark ? AppColors.darkForeground : AppColors.foreground;
+    final mutedFg = isDark
+        ? AppColors.darkMutedForeground
+        : AppColors.mutedForeground;
+    final card = isDark ? AppColors.darkSurface : Colors.white;
+    final isCompact =
+        MediaQuery.orientationOf(context) == Orientation.landscape &&
+        MediaQuery.sizeOf(context).height < 500;
+    final buttonSize = isCompact ? 34.0 : 40.0;
+
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        horizontal: isCompact ? 16 : 20,
+        vertical: isCompact ? 8 : 16,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Container(
+              width: buttonSize,
+              height: buttonSize,
+              decoration: BoxDecoration(
+                color: card.withValues(alpha: isDark ? 0.9 : 0.75),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: isDark ? AppColors.darkBorder : Colors.white,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Icon(
+                Icons.arrow_back,
+                color: fg,
+                size: isCompact ? 18 : 20,
+              ),
+            ),
+          ),
+          SizedBox(width: isCompact ? 12 : 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  context.tr('aboutTitle'),
+                  style: TextStyle(
+                    fontSize: isCompact ? 16 : 18,
+                    fontWeight: FontWeight.w800,
+                    color: fg,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  context.tr('aboutSubtitle'),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: mutedFg,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hive_ce_flutter/hive_flutter.dart';
 import 'package:tbcare_plus/core/settings/app_settings.dart';
 import 'package:tbcare_plus/core/widgets/app_bottom_nav.dart';
+import 'package:tbcare_plus/core/widgets/app_scaffold_with_nav.dart';
 import 'package:tbcare_plus/features/about/pages/about_page.dart';
 import 'package:tbcare_plus/features/assessment/pages/full_assessment_page.dart';
 import 'package:tbcare_plus/features/history/pages/history_detail_page.dart';
@@ -249,6 +250,152 @@ void main() {
     }
   });
 
+  testWidgets('landscape rail keeps labels visible and scrolls when needed', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(844, 180);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Row(
+            children: [
+              AppNavRail(currentIndex: 0, onTap: _ignoreNavigation),
+              const Expanded(child: SizedBox.shrink()),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getSize(find.byType(AppNavRail)).width,
+      greaterThanOrEqualTo(100),
+    );
+    expect(
+      find.descendant(
+        of: find.byType(AppNavRail),
+        matching: find.byType(SingleChildScrollView),
+      ),
+      findsOneWidget,
+    );
+    for (final label in ['Beranda', 'Riwayat', 'Profil']) {
+      expect(find.text(label), findsOneWidget);
+      expect(tester.getSize(find.text(label)).width, lessThan(100));
+      final labelWidget = tester.widget<Text>(find.text(label));
+      expect(labelWidget.maxLines, isNull);
+      expect(labelWidget.overflow, isNull);
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('wide layout keeps navigation beside content while resizing', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: AppScaffoldWithNav(
+          currentIndex: 0,
+          onNavTap: _ignoreNavigation,
+          child: Center(child: Text('Main content')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AppNavRail), findsOneWidget);
+    expect(find.byType(AppBottomNav), findsNothing);
+    _expectContentBesideRail(tester);
+
+    tester.view.physicalSize = const Size(844, 390);
+    await tester.pumpAndSettle();
+    expect(find.byType(AppNavRail), findsOneWidget);
+    expect(find.byType(AppBottomNav), findsNothing);
+    _expectContentBesideRail(tester);
+
+    tester.view.physicalSize = const Size(390, 844);
+    await tester.pumpAndSettle();
+    expect(find.byType(AppBottomNav), findsOneWidget);
+    expect(find.byType(AppNavRail), findsNothing);
+    _expectContentVisible(tester);
+
+    tester.view.physicalSize = const Size(768, 1024);
+    await tester.pumpAndSettle();
+    expect(find.byType(AppBottomNav), findsOneWidget);
+    expect(find.byType(AppNavRail), findsNothing);
+    _expectContentVisible(tester);
+
+    tester.view.physicalSize = const Size(1024, 768);
+    await tester.pumpAndSettle();
+    expect(find.byType(AppBottomNav), findsOneWidget);
+    expect(find.byType(AppNavRail), findsNothing);
+    _expectContentVisible(tester);
+  });
+
+  testWidgets(
+    'about header keeps back button, title, and subtitle aligned responsively',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      for (final size in [
+        const Size(390, 844),
+        const Size(844, 390),
+        const Size(768, 1024),
+        const Size(1280, 800),
+      ]) {
+        tester.view.physicalSize = size;
+        await tester.pumpWidget(
+          MaterialApp(home: Scaffold(body: AboutPageHeader(isDark: false))),
+        );
+        await tester.pumpAndSettle();
+
+        final back = tester.getRect(find.byIcon(Icons.arrow_back));
+        final title = tester.getRect(find.text('Tentang Aplikasi Ini'));
+        final subtitle = tester.getRect(
+          find.text('Pelajari lebih lanjut tentang TBCare+'),
+        );
+
+        expect(title.left, greaterThan(back.right));
+        expect(title.center.dy, closeTo(back.center.dy, 18));
+        expect(subtitle.left, closeTo(title.left, 1));
+        expect(subtitle.top, greaterThanOrEqualTo(title.bottom));
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
+
+  testWidgets(
+    'about first card follows the compact header with clear spacing',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(const MaterialApp(home: AboutPage()));
+      await tester.pumpAndSettle();
+
+      final subtitle = tester.getRect(
+        find.text('Pelajari lebih lanjut tentang TBCare+'),
+      );
+      final firstCard = tester.getRect(find.text('Apa itu TBCare+?'));
+      expect(firstCard.top, greaterThan(subtitle.bottom));
+      expect(firstCard.top - subtitle.bottom, lessThan(48));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'developer cards show profile names instead of a generic LinkedIn label',
     (tester) async {
@@ -264,3 +411,23 @@ void main() {
 }
 
 void _ignoreNavigation(int _) {}
+
+void _expectContentBesideRail(WidgetTester tester) {
+  final contentRect = tester.getRect(find.text('Main content'));
+  final railRect = tester.getRect(find.byType(AppNavRail));
+  expect(contentRect.left, greaterThanOrEqualTo(railRect.right));
+  expect(contentRect.right, lessThanOrEqualTo(tester.view.physicalSize.width));
+  expect(contentRect.height, greaterThan(0));
+  expect(tester.takeException(), isNull);
+}
+
+void _expectContentVisible(WidgetTester tester) {
+  final contentRect = tester.getRect(find.text('Main content'));
+  expect(contentRect.left, greaterThanOrEqualTo(0));
+  expect(contentRect.right, lessThanOrEqualTo(tester.view.physicalSize.width));
+  expect(
+    contentRect.bottom,
+    lessThanOrEqualTo(tester.view.physicalSize.height),
+  );
+  expect(tester.takeException(), isNull);
+}

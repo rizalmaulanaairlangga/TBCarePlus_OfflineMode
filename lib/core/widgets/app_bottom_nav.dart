@@ -17,16 +17,19 @@ const List<AppNavItem> kAppNavItems = [
   AppNavItem(icon: Icons.person_rounded, labelKey: 'navProfile'),
 ];
 
-/// Compact Left-Side Navigation Rail used on landscape phones
-/// Saves precious vertical space and provides quick thumb access on the left.
+/// Side navigation rail for short landscape and wide layouts.
 class AppNavRail extends StatelessWidget {
   final int currentIndex;
   final Function(int) onTap;
+  final double width;
+  final bool isExpanded;
 
   const AppNavRail({
     super.key,
     required this.currentIndex,
     required this.onTap,
+    this.width = 112,
+    this.isExpanded = false,
   });
 
   @override
@@ -41,7 +44,7 @@ class AppNavRail extends StatelessWidget {
     ).scale(1).clamp(0.85, 1.5);
 
     return Container(
-      width: 82 * visualScale,
+      width: width * visualScale,
       decoration: BoxDecoration(
         color: (isDark ? AppColors.darkSurface : Colors.white).withValues(
           alpha: 0.96,
@@ -62,65 +65,78 @@ class AppNavRail extends StatelessWidget {
       ),
       child: SafeArea(
         right: false,
-        child: Column(
-          children: [
-            SizedBox(height: 8 * visualScale),
-            // Mini App Logo at top of rail
-            Container(
-              width: 36 * visualScale,
-              height: 36 * visualScale,
-              decoration: BoxDecoration(
-                color: isDark ? AppColors.darkSurfaceAlt : Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: (isDark ? AppColors.darkBorder : Colors.white)
-                      .withValues(alpha: 0.8),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight.isFinite
+                      ? constraints.maxHeight
+                      : 0,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: primary.withValues(alpha: 0.15),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Center(
-                child: Image.asset(
-                  'assets/images/img_logo_app.png',
-                  width: 22 * visualScale,
-                  height: 22 * visualScale,
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) => Icon(
-                    Icons.shield_outlined,
-                    color: primary,
-                    size: 16 * visualScale,
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(height: 8 * visualScale),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  for (int i = 0; i < kAppNavItems.length; i++) ...[
-                    _buildRailItem(
-                      context,
-                      item: kAppNavItems[i],
-                      index: i,
-                      isDark: isDark,
-                      primary: primary,
-                      mutedFg: mutedFg,
-                      visualScale: visualScale,
-                    ),
-                    if (i < kAppNavItems.length - 1)
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8 * visualScale),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: isExpanded
+                        ? CrossAxisAlignment.stretch
+                        : CrossAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 36 * visualScale,
+                        height: 36 * visualScale,
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? AppColors.darkSurfaceAlt
+                              : Colors.white,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color:
+                                (isDark ? AppColors.darkBorder : Colors.white)
+                                    .withValues(alpha: 0.8),
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: primary.withValues(alpha: 0.15),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: Image.asset(
+                            'assets/images/img_logo_app.png',
+                            width: 22 * visualScale,
+                            height: 22 * visualScale,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) => Icon(
+                              Icons.shield_outlined,
+                              color: primary,
+                              size: 16 * visualScale,
+                            ),
+                          ),
+                        ),
+                      ),
                       SizedBox(height: 8 * visualScale),
-                  ],
-                ],
+                      for (int i = 0; i < kAppNavItems.length; i++) ...[
+                        _buildRailItem(
+                          context,
+                          item: kAppNavItems[i],
+                          index: i,
+                          isDark: isDark,
+                          primary: primary,
+                          mutedFg: mutedFg,
+                          visualScale: visualScale,
+                        ),
+                        if (i < kAppNavItems.length - 1)
+                          SizedBox(height: 8 * visualScale),
+                      ],
+                    ],
+                  ),
+                ),
               ),
-            ),
-            SizedBox(height: 8 * visualScale),
-          ],
+            );
+          },
         ),
       ),
     );
@@ -149,10 +165,10 @@ class AppNavRail extends StatelessWidget {
           borderRadius: BorderRadius.circular(14),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 250),
-            width: 72 * visualScale,
+            width: (isExpanded ? 200 : 100) * visualScale,
             padding: EdgeInsets.symmetric(
-              vertical: 6 * visualScale,
-              horizontal: 4 * visualScale,
+              vertical: (isExpanded ? 8 : 6) * visualScale,
+              horizontal: (isExpanded ? 12 : 4) * visualScale,
             ),
             decoration: BoxDecoration(
               color: isActive
@@ -166,28 +182,59 @@ class AppNavRail extends StatelessWidget {
                 width: 1,
               ),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  item.icon,
-                  size: 22 * visualScale,
-                  color: isActive ? primary : mutedFg.withValues(alpha: 0.7),
-                ),
-                SizedBox(height: 3 * visualScale),
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
-                    color: isActive ? primary : mutedFg.withValues(alpha: 0.85),
+            child: isExpanded
+                ? Row(
+                    children: [
+                      Icon(
+                        item.icon,
+                        size: 22 * visualScale,
+                        color: isActive
+                            ? primary
+                            : mutedFg.withValues(alpha: 0.7),
+                      ),
+                      SizedBox(width: 12 * visualScale),
+                      Expanded(
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: isActive
+                                ? FontWeight.w800
+                                : FontWeight.w600,
+                            color: isActive
+                                ? primary
+                                : mutedFg.withValues(alpha: 0.85),
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        item.icon,
+                        size: 22 * visualScale,
+                        color: isActive
+                            ? primary
+                            : mutedFg.withValues(alpha: 0.7),
+                      ),
+                      SizedBox(height: 3 * visualScale),
+                      Text(
+                        label,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: isActive
+                              ? FontWeight.w800
+                              : FontWeight.w600,
+                          color: isActive
+                              ? primary
+                              : mutedFg.withValues(alpha: 0.85),
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ],
-            ),
           ),
         ),
       ),
