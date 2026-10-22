@@ -1,10 +1,10 @@
 # TBCare+ (Offline Open-Source)
 
-> **📲 Download APK siap instal — tidak perlu build!** Langsung unduh di [**Releases v1.3.3**](https://github.com/rizalmaulanaairlangga/TBCare-_OfflineMode/releases/tag/v1.3.3)
+> **📲 Download APK siap instal — tidak perlu build!** Langsung unduh di [**Releases v1.3.3**](https://github.com/rizalmaulanaairlangga/TBCarePlus_OfflineMode/releases/tag/v1.3.3)
 
-[![Release](https://img.shields.io/github/v/release/rizalmaulanaairlangga/TBCare-_OfflineMode?label=download&color=10B981)](https://github.com/rizalmaulanaairlangga/TBCare-_OfflineMode/releases/tag/v1.3.3)
+[![Release](https://img.shields.io/github/v/release/rizalmaulanaairlangga/TBCarePlus_OfflineMode?label=download&color=10B981)](https://github.com/rizalmaulanaairlangga/TBCarePlus_OfflineMode/releases/tag/v1.3.3)
 [![Flutter](https://img.shields.io/badge/Flutter-3.41-blue)](https://flutter.dev)
-[![Offline](https://img.shields.io/badge/offline-100%25-success)](https://github.com/rizalmaulanaairlangga/TBCare-_OfflineMode)
+[![Offline](https://img.shields.io/badge/offline-100%25-success)](https://github.com/rizalmaulanaairlangga/TBCarePlus_OfflineMode)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 TBCare+ is an offline-first tuberculosis early-detection expert system built with **Flutter**. All screening, scoring, and history are stored locally on-device with `hive_ce` — no backend, no Supabase, no internet required.
@@ -15,9 +15,9 @@ TBCare+ is an offline-first tuberculosis early-detection expert system built wit
 
 | File | Ukuran | Cocok untuk | Link |
 |------|--------|-------------|------|
-| **Universal (Recommended)** | 46.9 MB | Semua device | [**TBCare-v1.3.3-release-universal.apk**](https://github.com/rizalmaulanaairlangga/TBCare-_OfflineMode/releases/download/v1.3.3/TBCare-v1.3.3-release-universal.apk) |
-| **arm64-v8a** | 16.7 MB | HP baru 64-bit | [**TBCare-v1.3.3-arm64.apk**](https://github.com/rizalmaulanaairlangga/TBCare-_OfflineMode/releases/download/v1.3.3/TBCare-v1.3.3-arm64.apk) |
-| **armeabi-v7a** | 14.3 MB | HP lama 32-bit | [**TBCare-v1.3.3-armeabi-v7a.apk**](https://github.com/rizalmaulanaairlangga/TBCare-_OfflineMode/releases/download/v1.3.3/TBCare-v1.3.3-armeabi-v7a.apk) |
+| **Universal (Recommended)** | 46.9 MB | Semua device | [**TBCare-v1.3.3-release-universal.apk**](https://github.com/rizalmaulanaairlangga/TBCarePlus_OfflineMode/releases/download/v1.3.3/TBCare-v1.3.3-release-universal.apk) |
+| **arm64-v8a** | 16.7 MB | HP baru 64-bit | [**TBCare-v1.3.3-arm64.apk**](https://github.com/rizalmaulanaairlangga/TBCarePlus_OfflineMode/releases/download/v1.3.3/TBCare-v1.3.3-arm64.apk) |
+| **armeabi-v7a** | 14.3 MB | HP lama 32-bit | [**TBCare-v1.3.3-armeabi-v7a.apk**](https://github.com/rizalmaulanaairlangga/TBCarePlus_OfflineMode/releases/download/v1.3.3/TBCare-v1.3.3-armeabi-v7a.apk) |
 
 > **Cara instal:** Download → Buka file APK → Izinkan *Instal dari sumber tidak dikenal* jika diminta → Instal → Buka TBCare+.
 > 
@@ -57,8 +57,8 @@ TBCare+ is an offline-first tuberculosis early-detection expert system built wit
 ### Setup & Run (no backend, no .env)
 
 ```bash
-git clone https://github.com/rizalmaulanaairlangga/TBCare-_OfflineMode.git
-cd TBCare-_OfflineMode
+git clone https://github.com/rizalmaulanaairlangga/TBCarePlus_OfflineMode.git
+cd TBCarePlus_OfflineMode
 flutter pub get
 flutter run
 ```
