@@ -69,6 +69,7 @@ class ResponsiveCenter extends StatelessWidget {
 
     return Align(
       alignment: Alignment.topCenter,
+      heightFactor: 1.0,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
         child: Padding(padding: padding ?? EdgeInsets.zero, child: child),

@@ -255,9 +255,12 @@ class AppBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // If phone is in landscape with limited vertical height, hide bottom nav
-    // (the screen will use AppNavRail on the left instead).
-    if (context.isLandscapePhone) {
+    // If in landscape rail mode, hide bottom navigation bar.
+    final size = MediaQuery.sizeOf(context);
+    final isRailMode =
+        size.width >= Breakpoints.expanded ||
+        (context.isLandscape && size.height < 500);
+    if (isRailMode) {
       return const SizedBox.shrink();
     }
 
